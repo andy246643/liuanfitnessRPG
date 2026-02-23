@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - 'fitness_rpg_app/**'
+      - 'coach_dashboard_app/**'
       - '.github/workflows/deploy_rpg.yml'
   workflow_dispatch: # Allows manual trigger from GitHub UI
 
@@ -25,16 +26,34 @@ jobs:
         with:
           channel: 'stable'
           
-      - name: Install Dependencies
+      # Build Fitness RPG App (Student)
+      - name: Install Dependencies (Fitness RPG)
         working-directory: ./fitness_rpg_app
         run: flutter pub get
 
-      - name: Build Web Site
+      - name: Build Web Site (Fitness RPG)
         working-directory: ./fitness_rpg_app
-        run: flutter build web --release --base-href "/liuanfitnessRPG/"
+        run: flutter build web --release --base-href "/liuanfitnessRPG/" --dart-define=SUPABASE_URL=${{ secrets.SUPABASE_URL }} --dart-define=SUPABASE_ANON_KEY=${{ secrets.SUPABASE_ANON_KEY }}
 
+      # Build Coach Dashboard App (Coach)
+      - name: Install Dependencies (Coach Dashboard)
+        working-directory: ./coach_dashboard_app
+        run: flutter pub get
+
+      - name: Build Web Site (Coach Dashboard)
+        working-directory: ./coach_dashboard_app
+        run: flutter build web --release --base-href "/liuanfitnessRPG/coach/" --dart-define=SUPABASE_URL=${{ secrets.SUPABASE_URL }} --dart-define=SUPABASE_ANON_KEY=${{ secrets.SUPABASE_ANON_KEY }}
+
+      # Combine Builds
+      - name: Prepare Combined Build Folder
+        run: |
+          mkdir -p dist/coach
+          cp -r fitness_rpg_app/build/web/* dist/
+          cp -r coach_dashboard_app/build/web/* dist/coach/
+
+      # Deploy
       - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v3
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./fitness_rpg_app/build/web
+          publish_dir: ./dist
