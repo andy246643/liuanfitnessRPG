@@ -1,0 +1,807 @@
+import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'screens/create_plan_screen.dart';
+
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+
+  // 安全地讀取環境變數
+  const supabaseUrl = String.fromEnvironment('SUPABASE_URL');
+  const supabaseAnonKey = String.fromEnvironment('SUPABASE_ANON_KEY');
+
+  if (supabaseUrl.isEmpty || supabaseAnonKey.isEmpty) {
+    debugPrint('⚠️ Warning: SUPABASE_URL or SUPABASE_ANON_KEY is missing.');
+  }
+
+  // 只有在變數存在時才嘗試初始化，避免 crash
+  if (supabaseUrl.isNotEmpty && supabaseAnonKey.isNotEmpty) {
+    await Supabase.initialize(
+      url: supabaseUrl,
+      anonKey: supabaseAnonKey,
+    );
+  }
+
+  runApp(const CoachDashboardApp());
+}
+
+class CoachDashboardApp extends StatelessWidget {
+  const CoachDashboardApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      debugShowCheckedModeBanner: false,
+      title: 'Coach Dashboard',
+      theme: ThemeData(
+        colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
+        useMaterial3: true,
+      ),
+      home: const CoachLoginScreen(),
+    );
+  }
+}
+
+// ----------------------------------------------------------------------
+// 1. 教練登入畫面
+// ----------------------------------------------------------------------
+class CoachLoginScreen extends StatefulWidget {
+  const CoachLoginScreen({super.key});
+
+  @override
+  State<CoachLoginScreen> createState() => _CoachLoginScreenState();
+}
+
+class _CoachLoginScreenState extends State<CoachLoginScreen> {
+  final TextEditingController _nameController = TextEditingController(text: "Test Coach");
+  bool _isLoading = false;
+  String _errorMessage = "";
+
+  Future<void> _login() async {
+    final name = _nameController.text.trim();
+    if (name.isEmpty) return;
+
+    setState(() {
+      _isLoading = true;
+      _errorMessage = "";
+    });
+
+    try {
+      final supabase = Supabase.instance.client;
+      final response = await supabase
+          .from('users')
+          .select('*')
+          .ilike('name', name)
+          .eq('role', 'coach')
+          .limit(1);
+
+      if (response.isNotEmpty) {
+        final coachId = response[0]['id'];
+        final coachName = response[0]['name'];
+        if (!mounted) return;
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(
+            builder: (context) => TraineeListScreen(
+              coachId: coachId,
+              coachName: coachName,
+            ),
+          ),
+        );
+      } else {
+        setState(() {
+          _errorMessage = "找不到名為 '$name' 的教練帳號，請確認名稱是否正確。";
+        });
+      }
+    } catch (e) {
+      setState(() {
+        _errorMessage = "登入發生錯誤: $e";
+      });
+      } finally {
+        setState(() {
+          _isLoading = false;
+        });
+      }
+  }
+
+  Future<void> _registerCoach() async {
+    final name = _nameController.text.trim();
+    if (name.isEmpty) {
+      setState(() => _errorMessage = "請先輸入想要註冊的教練名稱");
+      return;
+    }
+
+    setState(() {
+      _isLoading = true;
+      _errorMessage = "";
+    });
+
+    try {
+      final supabase = Supabase.instance.client;
+      // 1. 檢查是否已經有同名的教練了
+      final checkResponse = await supabase
+          .from('users')
+          .select('id')
+          .ilike('name', name)
+          .eq('role', 'coach')
+          .limit(1);
+
+      if (checkResponse.isNotEmpty) {
+        setState(() {
+          _errorMessage = "名稱已被使用！請更換一個名稱重新註冊。";
+        });
+        return;
+      }
+
+      // 2. 建立新的教練帳號
+      // Supabase 的 UUID 會透過資料庫的 DEFAULT gen_random_uuid 自動生成
+      // (如果沒有設 DEFAULT，也可以在這裡手動用 uuid 套件產生，但我們讓 DB 自己配發)
+      final insertResponse = await supabase.from('users').insert({
+        'name': name,
+        'role': 'coach'
+      }).select(); // 取得剛建立好的資料(含產生的 ID)
+
+      if (insertResponse.isNotEmpty) {
+        final newCoachId = insertResponse[0]['id'];
+        final newCoachName = insertResponse[0]['name'];
+
+        if (!mounted) return;
+        
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('🎉 成功註冊教練：$newCoachName', style: const TextStyle(fontFamily: 'Cubic11'))),
+        );
+
+        // 3. 自動登入並跳轉
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(
+            builder: (context) => TraineeListScreen(
+              coachId: newCoachId,
+              coachName: newCoachName,
+            ),
+          ),
+        );
+      }
+    } catch (e) {
+      setState(() {
+        _errorMessage = "註冊發生錯誤: $e\n(可能是因為您的資料庫 users.id 欄位不允許為空且沒有設定自動生成 UUID)";
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.grey[50],
+      body: Center(
+        child: Container(
+          constraints: const BoxConstraints(maxWidth: 400),
+          padding: const EdgeInsets.all(32),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Icon(Icons.fitness_center, size: 80, color: Colors.blue),
+              const SizedBox(height: 24),
+              const Text(
+                '教練管理系統',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 40),
+              TextField(
+                controller: _nameController,
+                decoration: InputDecoration(
+                  labelText: '教練名稱',
+                  hintText: '例如: Test Coach',
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                  prefixIcon: const Icon(Icons.person),
+                ),
+                onSubmitted: (_) => _login(),
+              ),
+              const SizedBox(height: 16),
+              if (_errorMessage.isNotEmpty)
+                Text(
+                  _errorMessage,
+                  style: const TextStyle(color: Colors.red),
+                  textAlign: TextAlign.center,
+                ),
+              const SizedBox(height: 16),
+              ElevatedButton(
+                onPressed: _isLoading ? null : _login,
+                style: ElevatedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  backgroundColor: Colors.blue,
+                  foregroundColor: Colors.white,
+                ),
+                child: _isLoading
+                    ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                    : const Text('登 入', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+              ),
+              const SizedBox(height: 12),
+              OutlinedButton(
+                onPressed: _isLoading ? null : _registerCoach,
+                style: OutlinedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  side: const BorderSide(color: Colors.blue),
+                  foregroundColor: Colors.blue,
+                ),
+                child: _isLoading
+                    ? const SizedBox.shrink()
+                    : const Text('🌟 註冊新教練', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ----------------------------------------------------------------------
+// 2. 學員列表首頁 (My Trainees)
+// ----------------------------------------------------------------------
+class TraineeListScreen extends StatefulWidget {
+  final String coachId;
+  final String coachName;
+
+  const TraineeListScreen({
+    super.key,
+    required this.coachId,
+    required this.coachName,
+  });
+
+  @override
+  State<TraineeListScreen> createState() => _TraineeListScreenState();
+}
+
+class _TraineeListScreenState extends State<TraineeListScreen> {
+  Future<List<dynamic>> _fetchTrainees() async {
+    try {
+      final supabase = Supabase.instance.client;
+      // 取得特定教練指導的身分為 trainee 的使用者
+      final response = await supabase
+          .from('users')
+          .select('id, name, created_at')
+          .eq('role', 'trainee')
+          .eq('coach_id', widget.coachId)
+          .order('created_at', ascending: false);
+      return response as List<dynamic>;
+    } catch (e) {
+      throw Exception('Fetch trainees failed: $e');
+    }
+  }
+
+  Future<void> _createNewTrainee(BuildContext context) async {
+    final TextEditingController nameController = TextEditingController();
+    bool isCreating = false;
+
+    await showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: const Text('新增學員', style: TextStyle(fontWeight: FontWeight.bold)),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text('輸入學員名稱來建立新帳號並指派給自己。'),
+                  const SizedBox(height: 16),
+                  TextField(
+                    controller: nameController,
+                    decoration: const InputDecoration(
+                      labelText: '學員名稱',
+                      hintText: '例如: 小明',
+                      border: OutlineInputBorder(),
+                    ),
+                    autofocus: true,
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: isCreating ? null : () => Navigator.pop(ctx),
+                  child: const Text('取消'),
+                ),
+                ElevatedButton(
+                  onPressed: isCreating
+                      ? null
+                      : () async {
+                          final name = nameController.text.trim();
+                          if (name.isEmpty) return;
+
+                          setDialogState(() => isCreating = true);
+
+                          try {
+                            final supabase = Supabase.instance.client;
+                            // Generate simple UUID
+                            final newUuid = DateTime.now().millisecondsSinceEpoch.toRadixString(16).padRight(32, '0').replaceAllMapped(RegExp(r'(.{8})(.{4})(.{4})(.{4})(.{12})'), (m) => '${m[1]}-${m[2]}-${m[3]}-${m[4]}-${m[5]}');
+                            
+                            await supabase.from('users').insert({
+                              'id': newUuid,
+                              'name': name,
+                              'role': 'trainee',
+                              'coach_id': widget.coachId,
+                            });
+                            
+                            if (!mounted) return;
+                            Navigator.pop(ctx);
+                            setState(() {}); // 重新載入列表
+                            
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(content: Text('成功新增學員: $name')),
+                            );
+                          } catch (e) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                               SnackBar(content: Text('新增失敗: $e', style: const TextStyle(color: Colors.white)), backgroundColor: Colors.red),
+                            );
+                            setDialogState(() => isCreating = false);
+                          }
+                        },
+                  style: ElevatedButton.styleFrom(backgroundColor: Colors.blue, foregroundColor: Colors.white),
+                  child: isCreating
+                      ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                      : const Text('確認新增'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.grey[50],
+      appBar: AppBar(
+        title: Text('${widget.coachName} 的指導學員', style: const TextStyle(fontWeight: FontWeight.bold)),
+        backgroundColor: Colors.white,
+        surfaceTintColor: Colors.transparent,
+        elevation: 1,
+        shadowColor: Colors.black12,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.person_add),
+            tooltip: '新增學員',
+            onPressed: () => _createNewTrainee(context),
+          ),
+          IconButton(
+            icon: const Icon(Icons.logout),
+            tooltip: '登出',
+            onPressed: () {
+              Navigator.pushReplacement(
+                context,
+                MaterialPageRoute(builder: (context) => const CoachLoginScreen()),
+              );
+            },
+          ),
+        ],
+      ),
+      body: FutureBuilder<List<dynamic>>(
+        future: _fetchTrainees(),
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator());
+          }
+
+          if (snapshot.hasError) {
+            return Center(child: Text('載入學員列表失敗: ${snapshot.error}', style: const TextStyle(color: Colors.red)));
+          }
+
+          if (!snapshot.hasData || snapshot.data!.isEmpty) {
+            return const Center(child: Text('目前還沒有任何學員。', style: TextStyle(fontSize: 16, color: Colors.grey)));
+          }
+
+          final trainees = snapshot.data!;
+          
+          return ListView.builder(
+            padding: const EdgeInsets.all(16),
+            itemCount: trainees.length,
+            itemBuilder: (context, index) {
+              final trainee = trainees[index];
+              return Card(
+                elevation: 0,
+                color: Colors.white,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16),
+                  side: BorderSide(color: Colors.grey.shade200),
+                ),
+                margin: const EdgeInsets.only(bottom: 12),
+                child: ListTile(
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+                  leading: CircleAvatar(
+                    backgroundColor: Colors.blue.shade100,
+                    foregroundColor: Colors.blue.shade800,
+                    child: Text(trainee['name'].toString().substring(0, 1).toUpperCase()),
+                  ),
+                  title: Text(trainee['name'], style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+                  subtitle: Text('ID: ${trainee['id']}', style: TextStyle(fontSize: 12, color: Colors.grey.shade500)),
+                  trailing: const Icon(Icons.chevron_right, color: Colors.grey),
+                  onTap: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => TraineeSessionsScreen(
+                          traineeId: trainee['id'],
+                          traineeName: trainee['name'],
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              );
+            },
+          );
+        },
+      ),
+    );
+  }
+}
+
+// ----------------------------------------------------------------------
+// 3. 單一學員專屬訓練動態 (原本的 Dashboard)
+// ----------------------------------------------------------------------
+
+class TraineeSessionsScreen extends StatefulWidget {
+  final String traineeId;
+  final String traineeName;
+
+  const TraineeSessionsScreen({
+    super.key,
+    required this.traineeId,
+    required this.traineeName,
+  });
+
+  @override
+  State<TraineeSessionsScreen> createState() => _TraineeSessionsScreenState();
+}
+
+class _TraineeSessionsScreenState extends State<TraineeSessionsScreen> {
+  Future<List<Map<String, dynamic>>> _fetchSessions() async {
+    try {
+      final supabase = Supabase.instance.client;
+      final response = await supabase
+          .from('workout_logs')
+          .select('id, plan_name, created_at')
+          .eq('user_id', widget.traineeId)
+          .order('created_at', ascending: false);
+          
+      final logs = List<Map<String, dynamic>>.from(response);
+      final Map<String, Map<String, dynamic>> sessions = {};
+      
+      for (var log in logs) {
+        final dateStr = (log['created_at'] as String).substring(0, 10);
+        final planName = log['plan_name'] ?? '未知課表';
+        final key = '${dateStr}_$planName';
+        
+        if (!sessions.containsKey(key)) {
+          sessions[key] = {
+            'date': dateStr,
+            'plan_name': planName,
+            'exercise_count': 1,
+            'latest_time': log['created_at'],
+          };
+        } else {
+          sessions[key]!['exercise_count'] = (sessions[key]!['exercise_count'] as int) + 1;
+        }
+      }
+      
+      final result = sessions.values.toList();
+      result.sort((a, b) => (b['date'] as String).compareTo(a['date'] as String));
+      return result;
+      
+    } catch (e) {
+      throw Exception('Fetch failed: $e');
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.grey[50],
+      appBar: AppBar(
+        title: Text('${widget.traineeName} 的訓練日程', style: const TextStyle(fontWeight: FontWeight.bold)),
+        backgroundColor: Colors.white,
+        surfaceTintColor: Colors.transparent,
+        elevation: 1,
+      ),
+      body: FutureBuilder<List<Map<String, dynamic>>>(
+        future: _fetchSessions(),
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator());
+          }
+
+          if (snapshot.hasError) {
+             return Center(child: Text('資料讀取失敗: ${snapshot.error}', style: const TextStyle(color: Colors.red)));
+          }
+
+          if (!snapshot.hasData || snapshot.data!.isEmpty) {
+             return Center(
+               child: Column(
+                 mainAxisAlignment: MainAxisAlignment.center,
+                 children: [
+                   Icon(Icons.inbox, size: 60, color: Colors.grey.shade400),
+                   const SizedBox(height: 16),
+                   Text('目前沒有任何訓練紀錄', style: TextStyle(color: Colors.grey.shade600, fontSize: 16)),
+                 ],
+               )
+             );
+          }
+
+          final sessions = snapshot.data!;
+          return ListView.builder(
+            padding: const EdgeInsets.all(16),
+            itemCount: sessions.length,
+            itemBuilder: (context, index) {
+              final session = sessions[index];
+              return Card(
+                elevation: 0,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16),
+                  side: BorderSide(color: Colors.grey.shade200),
+                ),
+                margin: const EdgeInsets.only(bottom: 12),
+                color: Colors.white,
+                child: ListTile(
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                  leading: Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.blue.shade50,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Icon(Icons.calendar_month, color: Colors.blue.shade700),
+                  ),
+                  title: Text(session['plan_name'], style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+                  subtitle: Text('${session['date']} • 包含 ${session['exercise_count']} 個動作', style: TextStyle(color: Colors.grey.shade600, fontSize: 14)),
+                  trailing: const Icon(Icons.arrow_forward_ios, color: Colors.grey, size: 16),
+                  onTap: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => SessionDetailScreen(
+                          traineeId: widget.traineeId,
+                          traineeName: widget.traineeName,
+                          dateStr: session['date'],
+                          planName: session['plan_name'],
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              );
+            },
+          );
+        },
+      ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => CreatePlanScreen(
+                traineeId: widget.traineeId,
+                traineeName: widget.traineeName,
+              ),
+            ),
+          );
+        },
+        icon: const Icon(Icons.add),
+        label: const Text('新增課表'),
+        backgroundColor: Colors.blue,
+        foregroundColor: Colors.white,
+      ),
+    );
+  }
+}
+
+// ----------------------------------------------------------------------
+// 4. 對應訓練日的動作明細
+// ----------------------------------------------------------------------
+class SessionDetailScreen extends StatefulWidget {
+  final String traineeId;
+  final String traineeName;
+  final String dateStr;
+  final String planName;
+
+  const SessionDetailScreen({
+    super.key,
+    required this.traineeId,
+    required this.traineeName,
+    required this.dateStr,
+    required this.planName,
+  });
+
+  @override
+  State<SessionDetailScreen> createState() => _SessionDetailScreenState();
+}
+
+class _SessionDetailScreenState extends State<SessionDetailScreen> {
+  Future<List<Map<String, dynamic>>> _fetchSessionLogs() async {
+    try {
+      final supabase = Supabase.instance.client;
+      final response = await supabase
+          .from('workout_logs')
+          .select('*')
+          .eq('user_id', widget.traineeId)
+          .eq('plan_name', widget.planName)
+          .gte('created_at', '${widget.dateStr}T00:00:00.000Z')
+          .lte('created_at', '${widget.dateStr}T23:59:59.999Z')
+          .order('created_at', ascending: true);
+          
+      return List<Map<String, dynamic>>.from(response);
+    } catch (e) {
+      throw Exception('Fetch failed: $e');
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.grey[50], 
+      appBar: AppBar(
+        title: Text('${widget.dateStr} ${widget.planName}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+        backgroundColor: Colors.white,
+        surfaceTintColor: Colors.transparent,
+        elevation: 1,
+      ),
+      body: FutureBuilder<List<Map<String, dynamic>>>(
+        future: _fetchSessionLogs(),
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator());
+          }
+
+          if (snapshot.hasError) {
+             return Center(child: Text('資料讀取失敗: ${snapshot.error}', style: const TextStyle(color: Colors.red)));
+          }
+
+          final logs = snapshot.data ?? [];
+          if (logs.isEmpty) {
+             return const Center(child: Text('當日無動作明細'));
+          }
+
+          return ListView.builder(
+            padding: const EdgeInsets.all(16),
+            itemCount: logs.length,
+            itemBuilder: (context, index) {
+              final log = logs[index];
+              final exerciseName = log['exercise_name'] ?? '未知名稱';
+              final isSummary = exerciseName.contains('🏆 副本總結');
+              final volume = log['volume'] ?? 0;
+              final rpe = log['rpe'] ?? 0;
+              final completionRate = log['completion_rate'] ?? '';
+              final timeStr = log['created_at'] != null 
+                  ? DateTime.parse(log['created_at']).toLocal().toString().substring(11, 16) 
+                  : '未知時間';
+
+              return Card(
+                elevation: 0,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16),
+                  side: BorderSide(color: Colors.grey.shade200),
+                ),
+                margin: const EdgeInsets.only(bottom: 12),
+                color: isSummary ? Colors.blue.shade50 : Colors.white,
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Expanded(
+                            child: Text(
+                              exerciseName,
+                              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.black87),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: Colors.grey.shade100,
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Text(
+                              timeStr,
+                              style: TextStyle(color: Colors.grey.shade600, fontSize: 12, fontWeight: FontWeight.bold),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      if (!isSummary) ...[
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            _InfoChip(icon: Icons.fitness_center, label: '${log['weight']} kg x ${log['reps']}'),
+                            _InfoChip(icon: Icons.monitor_heart, label: 'RPE: $rpe', color: Colors.orange),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            _InfoChip(icon: Icons.data_exploration, label: '總容量: $volume', color: Colors.purple),
+                            _InfoChip(icon: Icons.check_circle, label: '達成率: $completionRate', color: Colors.green),
+                          ],
+                        ),
+                      ] else ...[
+                        Row(
+                          children: [
+                             _InfoChip(icon: Icons.emoji_events, label: '總結達成率: $completionRate', color: Colors.orange.shade800),
+                          ],
+                        ),
+                        if (log['notes'] != null && log['notes'] != "無") ...[
+                          const SizedBox(height: 12),
+                          Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: Colors.yellow.shade50,
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: Colors.yellow.shade200),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Text('📝 冒險筆記', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.orange)),
+                                const SizedBox(height: 4),
+                                Text(log['notes'], style: TextStyle(color: Colors.orange.shade900)),
+                              ],
+                            ),
+                          ),
+                        ]
+                      ]
+                    ],
+                  ),
+                ),
+              );
+            },
+          );
+        },
+      ),
+    );
+  }
+}
+
+// 可重複使用的小標籤組件
+class _InfoChip extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final Color color;
+
+  const _InfoChip({
+    required this.icon,
+    required this.label,
+    this.color = Colors.blue,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Icon(icon, size: 16, color: color),
+        const SizedBox(width: 4),
+        Text(
+          label,
+          style: TextStyle(color: Colors.grey.shade800, fontWeight: FontWeight.w500),
+        ),
+      ],
+    );
+  }
+}

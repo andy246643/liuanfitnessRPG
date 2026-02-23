@@ -1,0 +1,16 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "coach_dashboard_app",
+            "request": "launch",
+            "type": "dart",
+            "cwd": "coach_dashboard_app",
+            "program": "coach_dashboard_app/lib/main.dart",
+            "toolArgs": [
+                "--dart-define=SUPABASE_URL=https://zvzkqyadsaoplswtqxdq.supabase.co",
+                "--dart-define=SUPABASE_ANON_KEY=sb_publishable_ZAFoCnC-aGv3qASHP6nYCg_t_V1lv_v"
+            ]
+        }
+    ]
+}
