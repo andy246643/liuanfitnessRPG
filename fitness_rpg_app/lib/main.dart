@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
-
-import 'dart:async';
+import 'package:supabase_flutter/supabase_flutter.dart';import 'dart:async';
 import 'package:flutter_application_1/models/skin.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'dart:math';
+import 'package:uuid/uuid.dart';
+import 'package:vibration/vibration.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -71,13 +71,19 @@ class _WorkoutManagerState extends State<WorkoutManager> {
   String currentUserName = "";
 
   // 1. RPG 基礎狀態
-  int level = 1;
-  int totalXp = 0;
+  double totalVolume = 0;
+  String currentGender = "不提供";
+  double currentHeight = 0;
+  double currentWeight = 0;
+  double currentBodyFat = 0;
+  List<Map<String, dynamic>> weightHistory = [];
+  List<Map<String, dynamic>> bodyFatHistory = [];
   int currentRpe = 8;
   List<Map<String, dynamic>> allPlans = [];
   String selectedPlanName = "";
   String selectedPlanId = "";
   bool isTraining = false;
+  String? currentSessionId;
 
   // 2. 副本內部的「任務清單」狀態
   List<dynamic> allExercisesInPlan = [];
@@ -89,8 +95,6 @@ class _WorkoutManagerState extends State<WorkoutManager> {
 
   // 3. 結算與計時相關
   TextEditingController noteController = TextEditingController();
-  int restTime = 0;
-  bool showTimer = false;
   String lastCompletionRate = "0%";
 
   // 4. 歷史與成就相關
@@ -134,7 +138,7 @@ class _WorkoutManagerState extends State<WorkoutManager> {
       // 2. 找該教練旗下的這名學員
       final traineeResponse = await supabase
           .from('users')
-          .select('id, name')
+          .select('id, name, gender, height, weight, body_fat')
           .ilike('name', traineeName)
           .eq('role', 'trainee')
           .eq('coach_id', coachId)
@@ -148,6 +152,10 @@ class _WorkoutManagerState extends State<WorkoutManager> {
       // 登入成功
       setState(() {
         currentUserId = traineeResponse[0]['id'];
+        currentGender = traineeResponse[0]['gender'] ?? "不提供";
+        currentHeight = (traineeResponse[0]['height'] as num?)?.toDouble() ?? 0;
+        currentWeight = (traineeResponse[0]['weight'] as num?)?.toDouble() ?? 0;
+        currentBodyFat = (traineeResponse[0]['body_fat'] as num?)?.toDouble() ?? 0;
       });
       print("✅ 成功登入：$traineeName (ID: $currentUserId)");
 
@@ -185,37 +193,47 @@ class _WorkoutManagerState extends State<WorkoutManager> {
     // 2. 抓取歷史課表 (已完成的紀錄)
     final logsResponse = await supabase
         .from('workout_logs')
-        .select('id, plan_name, created_at, exercise_name, volume, weight, reps, notes')
+        .select('id, plan_name, created_at, exercise_name, volume, weight, reps, sets, session_id, set_details, notes')
         .eq('user_id', currentUserId)
         .order('created_at', ascending: false);
         
+    final metricsResponse = await supabase
+        .from('user_metrics_history')
+        .select('weight, body_fat, created_at')
+        .eq('user_id', currentUserId)
+        .order('created_at', ascending: true);
+        
+    final metricsList = List<Map<String, dynamic>>.from(metricsResponse);
     final logs = List<Map<String, dynamic>>.from(logsResponse);
     
     // 1. 先把所有 log 照梯次分組
     final Map<String, List<Map<String, dynamic>>> groupedLogs = {};
     for (var log in logs) {
+      final sessionId = log['session_id'];
       final dateStr = (log['created_at'] as String).substring(0, 10);
       final planName = log['plan_name'] ?? '未知課表';
-      final key = '${dateStr}_$planName';
+      // 這裡改以 session_id 為主，舊資料保留 date_planName 作為 group key
+      final key = sessionId != null ? sessionId.toString() : '${dateStr}_$planName';
+      
       if (!groupedLogs.containsKey(key)) groupedLogs[key] = [];
       groupedLogs[key]!.add(log);
     }
     
-    // 將歷史紀錄分組 (依據日期與計畫名稱)
+    // 將歷史紀錄分組 (依據 session_id，若無則降級使用 date_planKey)
     final Map<String, Map<String, dynamic>> sessionsMap = {};
     final Map<String, List<Map<String, dynamic>>> statsMap = {};
     
     // 2. 只把「有包含結算」的群組抽出來當作有效歷史
     for (var entry in groupedLogs.entries) {
-      final key = entry.key;
+      final key = entry.key; // 這裡改以 session_id 為主，舊資料保留 date_planName
       final sessionLogs = entry.value;
       
       bool isCompleted = sessionLogs.any((log) => (log['exercise_name'] ?? '').contains('🏆 副本總結'));
       if (isCompleted) {
-        final dateStr = key.substring(0, 10);
-        final planName = key.substring(11);
         final summaryLog = sessionLogs.firstWhere((log) => (log['exercise_name'] ?? '').contains('🏆 副本總結'));
         final sessionNote = summaryLog['notes'] ?? '';
+        final planName = summaryLog['plan_name'] ?? '未知課表';
+        final dateStr = (summaryLog['created_at'] as String).substring(0, 10);
         
         sessionsMap[key] = {
           'date': dateStr,
@@ -236,7 +254,9 @@ class _WorkoutManagerState extends State<WorkoutManager> {
               'exercise_name': exName,
               'weight': weight,
               'reps': reps,
+              'sets': log['sets'] ?? 0,
               'volume': volume,
+              'set_details': log['set_details'], // 新增的詳細資料
             });
             
             // 加入成就圖表的數據
@@ -249,6 +269,25 @@ class _WorkoutManagerState extends State<WorkoutManager> {
       }
     }
     
+    // 計算 Total Volume
+    double calculatedTotalVolume = 0;
+    for (var log in logs) {
+      if ((log['exercise_name'] ?? '').contains('🏆 副本總結')) continue;
+      final setDetails = log['set_details'] as List<dynamic>?;
+      if (setDetails != null && setDetails.isNotEmpty) {
+         for (var set in setDetails) {
+            double w = (set['weight'] as num?)?.toDouble() ?? 0;
+            int r = (set['reps'] as num?)?.toInt() ?? 0;
+            calculatedTotalVolume += (w > 0) ? (w * r) : (r * 10);
+         }
+      } else {
+         double w = (log['weight'] as num?)?.toDouble() ?? 0;
+         int r = (log['reps'] as num?)?.toInt() ?? 0;
+         int s = (log['sets'] as num?)?.toInt() ?? 0;
+         calculatedTotalVolume += ((w > 0) ? (w * r) : (r * 10)) * s;
+      }
+    }
+
     // 排序成就資料 (由舊到新)
     for (var key in statsMap.keys) {
        statsMap[key]!.sort((a, b) => (a['created_at'] as String).compareTo(b['created_at'] as String));
@@ -258,6 +297,9 @@ class _WorkoutManagerState extends State<WorkoutManager> {
     sessionsList.sort((a, b) => (b['date'] as String).compareTo(a['date'] as String));
 
     setState(() {
+      totalVolume = calculatedTotalVolume;
+      weightHistory = metricsList.where((m) => m['weight'] != null).toList();
+      bodyFatHistory = metricsList.where((m) => m['body_fat'] != null).toList();
       allPlans = List<Map<String, dynamic>>.from(response);
       historicalSessions = sessionsList;
       achievementStats = statsMap;
@@ -282,6 +324,7 @@ class _WorkoutManagerState extends State<WorkoutManager> {
         for (int i = 0; i < response.length; i++) i: false,
       };
       isTraining = true;
+      currentSessionId = const Uuid().v4(); // 初始化新的 session ID
       activeExercise = null;
       activeExerciseIndex = null;
     });
@@ -320,22 +363,17 @@ class _WorkoutManagerState extends State<WorkoutManager> {
     setState(() {
       currentSets[setIdx]['rate'] = "$rate%";
       lastCompletionRate = "$rate%";
-      print("Debug: Exercise payload is $ex"); // 確認資料庫有沒有傳下 rest_time_seconds
-      restTime = ex['rest_time_seconds'] ?? 60; // 優先使用資料庫設定的秒數，預設 60 秒
-      showTimer = true;
     });
-    _tick();
-  }
 
-  void _tick() {
-    Timer.periodic(const Duration(seconds: 1), (timer) {
-      if (!mounted || restTime <= 0 || !showTimer) {
-        timer.cancel();
-        setState(() => showTimer = false);
-      } else {
-        setState(() => restTime--);
-      }
-    });
+    int restTimeSeconds = ex['rest_time_seconds'] ?? 60; // 優先使用資料庫設定的秒數，預設 60 秒
+
+    showDialog(
+      context: context,
+      barrierDismissible: false, // 禁止點擊背景關閉
+      builder: (BuildContext context) {
+        return RestTimerDialog(restTimeSeconds: restTimeSeconds);
+      },
+    );
   }
 
   // 單一任務完成 (打勾回清單)
@@ -361,6 +399,9 @@ class _WorkoutManagerState extends State<WorkoutManager> {
       "exercise_name": activeExercise!['exercise'],
       "weight": (currentSets.last['weight'] as num).toDouble(),
       "reps": (currentSets.last['reps'] as num).toInt(),
+      "sets": currentSets.length,
+      "set_details": currentSets, // 寫入詳細 JSON 結構
+      "session_id": currentSessionId, // 寫入 session_id
       "completion_rate": rate,
       "volume": (currentSets.last['weight'] * currentSets.last['reps']).toDouble(),
       "rpe": currentRpe,
@@ -378,10 +419,10 @@ class _WorkoutManagerState extends State<WorkoutManager> {
     setState(() {
       exerciseFinalRates[activeExerciseIndex!] = rate;
       exerciseCompletion[activeExerciseIndex!] = true;
-      totalXp += 20;
-      if (totalXp >= 100) {
-        level++;
-        totalXp = 0;
+      for (var s in currentSets) {
+        double w = (s['weight'] as num).toDouble();
+        int r = (s['reps'] as num).toInt();
+        totalVolume += (w > 0) ? (w * r) : (r * 10);
       }
       activeExercise = null;
       activeExerciseIndex = null;
@@ -423,6 +464,119 @@ class _WorkoutManagerState extends State<WorkoutManager> {
       ),
     );
   }
+
+
+  // 顯示個人資料設定對話框
+  void _showProfileDialog() {
+    TextEditingController heightCtrl = TextEditingController(text: currentHeight > 0 ? currentHeight.toString() : '');
+    TextEditingController weightCtrl = TextEditingController(text: currentWeight > 0 ? currentWeight.toString() : '');
+    TextEditingController bodyFatCtrl = TextEditingController(text: currentBodyFat > 0 ? currentBodyFat.toString() : '');
+    String selectedGender = ["男", "女", "不提供"].contains(currentGender) ? currentGender : "不提供";
+
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return StatefulBuilder(
+          builder: (context, setStateDialog) {
+            return AlertDialog(
+              backgroundColor: Colors.grey[900],
+              title: const Text("冒險者身體密碼", style: TextStyle(fontFamily: 'Cubic11', color: Colors.white)),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    DropdownButtonFormField<String>(
+                      value: selectedGender,
+                      decoration: const InputDecoration(labelText: "性別", labelStyle: TextStyle(color: Colors.white70, fontFamily: 'Cubic11')),
+                      dropdownColor: Colors.grey[800],
+                      style: const TextStyle(color: Colors.white, fontFamily: 'Cubic11'),
+                      items: ["男", "女", "不提供"].map((g) => DropdownMenuItem(value: g, child: Text(g))).toList(),
+                      onChanged: (val) {
+                        setStateDialog(() => selectedGender = val!);
+                      },
+                    ),
+                    TextField(
+                      controller: heightCtrl,
+                      keyboardType: TextInputType.number,
+                      style: const TextStyle(color: Colors.white, fontFamily: 'Cubic11'),
+                      decoration: const InputDecoration(labelText: "身高 (cm)", labelStyle: TextStyle(color: Colors.white70, fontFamily: 'Cubic11')),
+                    ),
+                    TextField(
+                      controller: weightCtrl,
+                      keyboardType: TextInputType.number,
+                      style: const TextStyle(color: Colors.white, fontFamily: 'Cubic11'),
+                      decoration: const InputDecoration(labelText: "體重 (kg)", labelStyle: TextStyle(color: Colors.white70, fontFamily: 'Cubic11')),
+                    ),
+                    TextField(
+                      controller: bodyFatCtrl,
+                      keyboardType: TextInputType.number,
+                      style: const TextStyle(color: Colors.white, fontFamily: 'Cubic11'),
+                      decoration: const InputDecoration(labelText: "體脂肪 (%)", labelStyle: TextStyle(color: Colors.white70, fontFamily: 'Cubic11')),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text("取消", style: TextStyle(color: Colors.grey, fontFamily: 'Cubic11')),
+                ),
+                ElevatedButton(
+                  onPressed: () async {
+                    double newHeight = double.tryParse(heightCtrl.text) ?? 0;
+                    double newWeight = double.tryParse(weightCtrl.text) ?? 0;
+                    double newBodyFat = double.tryParse(bodyFatCtrl.text) ?? 0;
+                    
+                    try {
+                      await supabase.from('users').update({
+                        'gender': selectedGender,
+                        'height': newHeight,
+                        'weight': newWeight,
+                        'body_fat': newBodyFat,
+                      }).eq('id', currentUserId);
+
+                      bool metricsChanged = (newWeight != currentWeight || newBodyFat != currentBodyFat);
+
+                      if (metricsChanged && newWeight > 0) {
+                        await supabase.from('user_metrics_history').insert({
+                          'user_id': currentUserId,
+                          'weight': newWeight,
+                          'body_fat': newBodyFat,
+                        });
+                      }
+
+                      setState(() {
+                         currentGender = selectedGender;
+                         currentHeight = newHeight;
+                         currentWeight = newWeight;
+                         currentBodyFat = newBodyFat;
+                      });
+                      
+                      if (metricsChanged) {
+                         _fetchPlans(); // re-fetch metrics history
+                      }
+                      
+                      if (context.mounted) {
+                        Navigator.pop(context);
+                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('資料已更新', style: TextStyle(fontFamily: 'Cubic11')), backgroundColor: Colors.green));
+                      }
+                    } catch (e) {
+                      print("Error updating profile: $e");
+                    }
+                  },
+                  style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF00FF41)),
+                  child: const Text("儲存", style: TextStyle(color: Colors.black, fontFamily: 'Cubic11')),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+
+
 
   // 頂部等級條
   Widget _buildCharHeader() {
@@ -466,29 +620,46 @@ class _WorkoutManagerState extends State<WorkoutManager> {
             },
           ),
           const SizedBox(width: 20), // 間距
-          // --- 2. 右側：冒險者資訊 (就是你原本的那段 Column) ---
+          // --- 2. 右側：冒險者資訊 ---
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  "⚔️ 冒險者：$currentUserName",
-                  style: TextStyle(fontFamily: 'Cubic11',
-                    color: Theme.of(context).primaryColor,
-                    fontSize: 22, // 稍微縮小一點點以適應排版
-                    fontWeight: FontWeight.bold,
-                  ),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      "⚔️ 冒險者：$currentUserName",
+                      style: TextStyle(fontFamily: 'Cubic11',
+                        color: Theme.of(context).primaryColor,
+                        fontSize: 22,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.manage_accounts, color: Colors.white54),
+                      onPressed: () => _showProfileDialog(),
+                    ),
+                  ],
                 ),
                 const SizedBox(height: 10),
-                LinearProgressIndicator(
-                  value: totalXp / 100,
-                  color: Theme.of(context).primaryColor,
-                  backgroundColor: Colors.white10,
-                ),
-                const SizedBox(height: 5),
-                Text(
-                  "LV. $level  (XP: $totalXp / 100)",
-                  style: TextStyle(fontFamily: 'Cubic11',color: Colors.grey),
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Theme.of(context).primaryColor),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.fitness_center, color: Colors.white70, size: 20),
+                      const SizedBox(width: 8),
+                      Text(
+                        "總訓練量: ${totalVolume.toStringAsFixed(0)} kg",
+                        style: const TextStyle(fontFamily: 'Cubic11', color: Colors.white, fontSize: 16),
+                      ),
+                    ],
+                  ),
                 ),
               ],
             ),
@@ -636,6 +807,41 @@ class _WorkoutManagerState extends State<WorkoutManager> {
                   iconColor: Colors.white54,
                   collapsedIconColor: Colors.white54,
                   children: [
+                    ...sessionLogs.reversed.map((log) {
+                    final exName = log['exercise_name'];
+                    final setDetails = log['set_details'] as List<dynamic>?; // 詳細組數資料
+
+                    if (setDetails != null && setDetails.isNotEmpty) {
+                       // 顯示新版詳細組數資料
+                       return ExpansionTile(
+                          title: Text(exName, style: const TextStyle(fontFamily: 'Cubic11', color: Colors.white, fontSize: 16)),
+                          iconColor: const Color(0xFF00FF41),
+                          collapsedIconColor: Colors.grey,
+                          children: setDetails.map((set) {
+                             int setNum = set['set_num'] ?? 0;
+                             double weight = (set['weight'] as num?)?.toDouble() ?? 0;
+                             int reps = (set['reps'] as num?)?.toInt() ?? 0;
+                             String rate = set['rate'] ?? '';
+                             return ListTile(
+                                contentPadding: const EdgeInsets.symmetric(horizontal: 40),
+                                title: Text("第 $setNum 組:   $weight kg   x   $reps 下", style: const TextStyle(fontFamily: 'Cubic11', color: Colors.white70, fontSize: 14)),
+                                trailing: Text(rate, style: const TextStyle(fontFamily: 'Cubic11', color: Colors.green, fontSize: 12)),
+                             );
+                          }).toList(),
+                       );
+                    } else {
+                        // 顯示舊版資料
+                        final w = log['weight'];
+                        final r = log['reps'];
+                        final s = log['sets'];
+                        final valueText = w > 0 ? '$w kg x $s 組 x $r 下' : '$s 組 x $r 下';
+                        return ListTile(
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 40),
+                          title: Text(exName, style: const TextStyle(fontFamily: 'Cubic11', color: Colors.white70, fontSize: 14)),
+                          trailing: Text(valueText, style: const TextStyle(fontFamily: 'Cubic11', color: Colors.green, fontSize: 12)),
+                        );
+                    }
+                  }).toList(),
                     if (note.isNotEmpty)
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
@@ -655,18 +861,7 @@ class _WorkoutManagerState extends State<WorkoutManager> {
                           ],
                         ),
                       ),
-                    ...sessionLogs.map((log) {
-                    final exName = log['exercise_name'];
-                    final w = log['weight'];
-                    final r = log['reps'];
-                    final valueText = w > 0 ? '$w kg' : '$r 下';
-                    return ListTile(
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 40),
-                      title: Text(exName, style: const TextStyle(fontFamily: 'Cubic11', color: Colors.white70, fontSize: 14)),
-                      trailing: Text(valueText, style: const TextStyle(fontFamily: 'Cubic11', color: Colors.green, fontSize: 12)),
-                    );
-                  }).toList(),
-                ],
+                  ],
               ),
             );
           },
@@ -676,6 +871,34 @@ class _WorkoutManagerState extends State<WorkoutManager> {
   }
 
   Widget _buildAchievementsTab() {
+     return DefaultTabController(
+       length: 2,
+       child: Column(
+         children: [
+           const TabBar(
+              labelColor: Color(0xFF00FF41),
+              unselectedLabelColor: Colors.grey,
+              indicatorColor: Color(0xFF00FF41),
+              labelStyle: TextStyle(fontFamily: 'Cubic11', fontSize: 14),
+              tabs: [
+                 Tab(text: "動作數據"),
+                 Tab(text: "身體變化"),
+              ]
+           ),
+           Expanded(
+              child: TabBarView(
+                 children: [
+                    _buildExerciseStatsTab(),
+                    _buildBodyStatsTab(),
+                 ]
+              )
+           )
+         ]
+       )
+     );
+  }
+
+  Widget _buildExerciseStatsTab() {
      if (achievementStats.isEmpty) {
         return const Center(
            child: Text("尚未累積足夠的成就數據", style: TextStyle(fontFamily: 'Cubic11', color: Colors.grey)),
@@ -898,7 +1121,6 @@ class _WorkoutManagerState extends State<WorkoutManager> {
   Widget _buildBattleMode() {
     return Column(
       children: [
-        if (showTimer) _buildTimerOverlay(),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 20),
           child: Row(
@@ -1041,20 +1263,6 @@ class _WorkoutManagerState extends State<WorkoutManager> {
     );
   }
 
-  Widget _buildTimerOverlay() {
-    return Container(
-      width: double.infinity,
-      color: Colors.green.withValues(alpha: 0.9),
-      padding: const EdgeInsets.all(10),
-      child: Center(
-        child: Text(
-          "💖 體力回復中... $restTime s",
-          style: TextStyle(fontFamily: 'Cubic11',fontWeight: FontWeight.bold),
-        ),
-      ),
-    );
-  }
-
   // 副本結算與備註
   // 🚀 修改這個方法，讓它能接收總分並存檔
   Widget _buildFinalSummary(double finalScore) {
@@ -1074,6 +1282,8 @@ class _WorkoutManagerState extends State<WorkoutManager> {
           const SizedBox(height: 15),
           TextField(
             controller: noteController, // 🚀 這就是你原本就有的那支筆！
+            maxLines: null, // 支援多行
+            keyboardType: TextInputType.multiline, // 支援多行輸入鍵盤
             decoration: InputDecoration(
               labelText: "寫下冒險心得 (備註)...",
               labelStyle: TextStyle(fontFamily: 'Cubic11',color: Colors.grey),
@@ -1093,6 +1303,7 @@ class _WorkoutManagerState extends State<WorkoutManager> {
                   'completion_rate': finalRateString,
                   'total_rate': finalScore,
                   'notes': noteController.text, // 抓取筆記內容
+                  'session_id': currentSessionId, // 掛鉤同一個 session
                   'created_at': DateTime.now().toIso8601String(),
                 });
                 print("✅ 結算存檔成功！");
@@ -1121,6 +1332,118 @@ class _WorkoutManagerState extends State<WorkoutManager> {
       ),
     );
   }
+Widget _buildBodyStatsTab() {
+      if (weightHistory.isEmpty && bodyFatHistory.isEmpty) {
+         return const Center(
+            child: Text("尚未記錄任何身體數據，請點擊上方頭像旁的設定按鈕新增。", style: TextStyle(fontFamily: 'Cubic11', color: Colors.grey, fontSize: 12), textAlign: TextAlign.center),
+         );
+      }
+
+      List<FlSpot> weightSpots = [];
+      double maxWeight = 0;
+      double minWeight = double.infinity;
+      for (int i = 0; i < weightHistory.length; i++) {
+         double w = (weightHistory[i]['weight'] as num).toDouble();
+         weightSpots.add(FlSpot(i.toDouble(), w));
+         if (w > maxWeight) maxWeight = w;
+         if (w < minWeight) minWeight = w;
+      }
+      if (minWeight == double.infinity) minWeight = 0;
+
+      List<FlSpot> fatSpots = [];
+      double maxFat = 0;
+      double minFat = double.infinity;
+      for (int i = 0; i < bodyFatHistory.length; i++) {
+         double f = (bodyFatHistory[i]['body_fat'] as num).toDouble();
+         fatSpots.add(FlSpot(i.toDouble(), f));
+         if (f > maxFat) maxFat = f;
+         if (f < minFat) minFat = f;
+      }
+      if (minFat == double.infinity) minFat = 0;
+
+      return Padding(
+         padding: const EdgeInsets.all(20),
+         child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+               const Text(
+                 "💪 體重變化與體脂走勢",
+                 textAlign: TextAlign.center,
+                 style: TextStyle(fontFamily: 'Cubic11',color: Colors.grey, fontSize: 18, fontWeight: FontWeight.bold),
+               ),
+               const SizedBox(height: 20),
+               if (weightSpots.isEmpty && fatSpots.isEmpty)
+                  const Center(child: Text("目前無記錄", style: TextStyle(fontFamily: 'Cubic11', color: Colors.grey)))
+               else
+                  Expanded(
+                     child: LineChart(
+                        LineChartData(
+                           gridData: FlGridData(
+                              show: true,
+                              drawVerticalLine: false,
+                              getDrawingHorizontalLine: (value) => FlLine(color: Colors.white10, strokeWidth: 1),
+                           ),
+                           titlesData: FlTitlesData(
+                              leftTitles: AxisTitles(
+                                 axisNameWidget: const Text("數值", style: TextStyle(color: Colors.white54, fontSize: 10, fontFamily: 'Cubic11')),
+                                 sideTitles: SideTitles(
+                                    showTitles: true,
+                                    reservedSize: 40,
+                                    getTitlesWidget: (val, meta) => Text(val.toInt().toString(), style: const TextStyle(color: Colors.grey, fontSize: 10)),
+                                 )
+                              ),
+                              bottomTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                              rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                              topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                           ),
+                           borderData: FlBorderData(show: false),
+                           minX: 0,
+                           maxX: maxWeight > 0 || maxFat > 0 ? max(
+                             weightSpots.length > fatSpots.length ? weightSpots.length.toDouble() - 1 : fatSpots.length.toDouble() - 1,
+                             1.0
+                           ) : 1.0,
+                           minY: min(minWeight * 0.9, minFat * 0.9),
+                           maxY: max(maxWeight * 1.1, maxFat * 1.1),
+                           lineBarsData: [
+                              if (weightSpots.isNotEmpty)
+                                 LineChartBarData(
+                                    spots: weightSpots,
+                                    isCurved: true,
+                                    color: Colors.blueAccent,
+                                    barWidth: 3,
+                                    isStrokeCapRound: true,
+                                    dotData: FlDotData(show: true),
+                                 ),
+                              if (fatSpots.isNotEmpty)
+                                 LineChartBarData(
+                                    spots: fatSpots,
+                                    isCurved: true,
+                                    color: Colors.redAccent,
+                                    barWidth: 3,
+                                    isStrokeCapRound: true,
+                                    dotData: FlDotData(show: true),
+                                 ),
+                           ],
+                        ),
+                     ),
+                  ),
+               const SizedBox(height: 20),
+               Row(
+                 mainAxisAlignment: MainAxisAlignment.center,
+                 children: [
+                   Container(width: 12, height: 12, color: Colors.blueAccent),
+                   const SizedBox(width: 8),
+                   const Text("體重 (kg)", style: TextStyle(color: Colors.grey, fontFamily: 'Cubic11', fontSize: 12)),
+                   const SizedBox(width: 20),
+                   Container(width: 12, height: 12, color: Colors.redAccent),
+                   const SizedBox(width: 8),
+                   const Text("體脂 (%)", style: TextStyle(color: Colors.grey, fontFamily: 'Cubic11', fontSize: 12)),
+                 ],
+               ),
+            ],
+         ),
+      );
+   }
 }
 
 class SkinSelectionModal extends StatefulWidget {
@@ -1310,6 +1633,115 @@ class _SkinSelectionModalState extends State<SkinSelectionModal> {
           ],
         ),
       ),
+    );
+  }
+}
+
+class RestTimerDialog extends StatefulWidget {
+  final int restTimeSeconds;
+
+  const RestTimerDialog({super.key, required this.restTimeSeconds});
+
+  @override
+  State<RestTimerDialog> createState() => _RestTimerDialogState();
+}
+
+class _RestTimerDialogState extends State<RestTimerDialog> {
+  late DateTime endTime;
+  late Timer timer;
+  int remainingSeconds = 0;
+  bool isFinished = false;
+
+  @override
+  void initState() {
+    super.initState();
+    remainingSeconds = widget.restTimeSeconds;
+    endTime = DateTime.now().add(Duration(seconds: remainingSeconds));
+
+    timer = Timer.periodic(const Duration(seconds: 1), (Timer t) {
+      if (!mounted) {
+        t.cancel();
+        return;
+      }
+
+      final now = DateTime.now();
+      if (now.isAfter(endTime)) {
+        setState(() {
+          remainingSeconds = 0;
+          isFinished = true;
+        });
+        t.cancel();
+        _triggerVibration();
+      } else {
+        setState(() {
+          remainingSeconds = endTime.difference(now).inSeconds;
+        });
+      }
+    });
+  }
+
+  Future<void> _triggerVibration() async {
+    bool? hasVibrator = await Vibration.hasVibrator();
+    if (hasVibrator ?? false) {
+      Vibration.vibrate(duration: 1000);
+    }
+  }
+
+  @override
+  void dispose() {
+    timer.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: Colors.grey[900],
+      title: const Text(
+        "休息時間",
+        textAlign: TextAlign.center,
+        style: TextStyle(fontFamily: 'Cubic11', color: Colors.white, fontSize: 24),
+      ),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            isFinished ? "時間到！" : "💖 體力回復中...",
+            style: TextStyle(
+              fontFamily: 'Cubic11',
+              color: isFinished ? const Color(0xFF00FF41) : Colors.white70,
+              fontSize: 18,
+            ),
+          ),
+          const SizedBox(height: 20),
+          Text(
+            "$remainingSeconds s",
+            style: TextStyle(
+              fontFamily: 'Cubic11',
+              color: isFinished ? const Color(0xFF00FF41) : Colors.orange,
+              fontSize: 48,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        ],
+      ),
+      actionsAlignment: MainAxisAlignment.center,
+      actions: [
+        ElevatedButton(
+          onPressed: () {
+            Navigator.of(context).pop();
+          },
+          style: ElevatedButton.styleFrom(
+            backgroundColor: const Color(0xFF00FF41),
+            foregroundColor: Colors.black,
+            padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 15),
+          ),
+          child: const Text(
+            "停止休息，進行下一個",
+            style: TextStyle(fontFamily: 'Cubic11', fontSize: 16, fontWeight: FontWeight.bold),
+          ),
+        ),
+      ],
     );
   }
 }

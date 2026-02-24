@@ -1,0 +1,1 @@
+ALTER TABLE public.workout_logs ADD COLUMN IF NOT EXISTS session_id UUID, ADD COLUMN IF NOT EXISTS set_details JSONB;

@@ -284,16 +284,20 @@ class _DetailEditCard extends StatelessWidget {
                  ],
               ),
               const SizedBox(height: 12),
-              Row(
-                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              Wrap(
+                 spacing: 8.0,
+                 runSpacing: 8.0,
+                 alignment: WrapAlignment.spaceBetween,
+                 crossAxisAlignment: WrapCrossAlignment.center,
                  children: [
                     Row(
+                       mainAxisSize: MainAxisSize.min,
                        children: [
                           const Icon(Icons.battery_charging_full, size: 16, color: Colors.orange),
                           const SizedBox(width: 4),
                           const Text('自覺強度 RPE: ', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.orange)),
                           SizedBox(
-                             width: 60,
+                             width: 40,
                              child: TextFormField(
                                initialValue: detail.targetRpe.toString(),
                                decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.only(bottom: 4)),
@@ -305,12 +309,13 @@ class _DetailEditCard extends StatelessWidget {
                        ],
                     ),
                     Row(
+                       mainAxisSize: MainAxisSize.min,
                        children: [
                            const Icon(Icons.timer, size: 16, color: Colors.green),
                            const SizedBox(width: 4),
-                           const Text('休息 (秒): ', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.green)),
+                           const Text('休息(秒): ', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.green)),
                            SizedBox(
-                              width: 60,
+                              width: 40,
                               child: TextFormField(
                                 initialValue: detail.restTimeSeconds.toString(),
                                 decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.only(bottom: 4)),
@@ -321,9 +326,16 @@ class _DetailEditCard extends StatelessWidget {
                            )
                         ],
                      ),
-                    Text(
-                       'Volume: ${detail.targetVolume}',
-                       style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.blue),
+                    Container(
+                       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                       decoration: BoxDecoration(
+                         color: Colors.blue.withOpacity(0.1),
+                         borderRadius: BorderRadius.circular(8),
+                       ),
+                       child: Text(
+                          'Volume: ${detail.targetVolume}',
+                          style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.blue),
+                       ),
                     )
                  ],
               )
