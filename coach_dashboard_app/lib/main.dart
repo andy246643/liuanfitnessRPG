@@ -1284,21 +1284,49 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
                       ),
                       const SizedBox(height: 12),
                       if (!isSummary) ...[
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            _InfoChip(icon: Icons.fitness_center, label: '${log['weight']} kg x ${log['reps']}'),
-                            _InfoChip(icon: Icons.monitor_heart, label: 'RPE: $rpe', color: Colors.orange),
-                          ],
-                        ),
-                        const SizedBox(height: 8),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            _InfoChip(icon: Icons.data_exploration, label: '總容量: $volume', color: Colors.purple),
-                            _InfoChip(icon: Icons.check_circle, label: '達成率: $completionRate', color: Colors.green),
-                          ],
-                        ),
+                        if (log['set_details'] != null && (log['set_details'] as List).isNotEmpty) ...[
+                          Row(
+                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                             children: [
+                               _InfoChip(icon: Icons.monitor_heart, label: 'RPE: $rpe', color: Colors.orange),
+                               _InfoChip(icon: Icons.data_exploration, label: '總容量: $volume', color: Colors.purple),
+                             ],
+                          ),
+                          const SizedBox(height: 12),
+                          ...List.generate((log['set_details'] as List).length, (i) {
+                             final setDetail = log['set_details'][i];
+                             int setNum = setDetail['set_num'] ?? 0;
+                             double weight = (setDetail['weight'] as num?)?.toDouble() ?? 0;
+                             int reps = (setDetail['reps'] as num?)?.toInt() ?? 0;
+                             String rate = setDetail['rate'] ?? '';
+                             return Padding(
+                               padding: const EdgeInsets.only(bottom: 6.0),
+                               child: Row(
+                                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                 children: [
+                                   _InfoChip(icon: Icons.fitness_center, label: '第 $setNum 組:   $weight kg   x   $reps 下', color: Colors.grey.shade700),
+                                   _InfoChip(icon: Icons.check_circle, label: rate, color: Colors.green),
+                                 ],
+                               ),
+                             );
+                          }),
+                        ] else ...[
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              _InfoChip(icon: Icons.fitness_center, label: '${log['weight']} kg x ${log['reps']}'),
+                              _InfoChip(icon: Icons.monitor_heart, label: 'RPE: $rpe', color: Colors.orange),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              _InfoChip(icon: Icons.data_exploration, label: '總容量: $volume', color: Colors.purple),
+                              _InfoChip(icon: Icons.check_circle, label: '達成率: $completionRate', color: Colors.green),
+                            ],
+                          ),
+                        ]
                       ] else ...[
                         Row(
                           children: [

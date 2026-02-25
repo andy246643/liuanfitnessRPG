@@ -338,6 +338,60 @@ class _DetailEditCard extends StatelessWidget {
                        ),
                     )
                  ],
+              ),
+              const Divider(height: 24),
+              ExpansionTile(
+                title: const Text('設為替換動作 (Alternative)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.grey)),
+                tilePadding: EdgeInsets.zero,
+                childrenPadding: const EdgeInsets.only(bottom: 8),
+                shape: const Border(),
+                initiallyExpanded: detail.altExercise != null && detail.altExercise!.isNotEmpty,
+                children: [
+                  Row(
+                    children: [
+                      const Icon(Icons.swap_horiz, color: Colors.indigo),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: TextFormField(
+                          initialValue: detail.altExercise,
+                          decoration: const InputDecoration(labelText: '替換動作名稱 (留空代表無)', isDense: true),
+                          onChanged: (val) => onChanged(detail.copyWith(altExercise: val)),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextFormField(
+                          initialValue: detail.altTargetSets.toString(),
+                          decoration: const InputDecoration(labelText: '替換組數', isDense: true),
+                          keyboardType: TextInputType.number,
+                          onChanged: (val) => onChanged(detail.copyWith(altTargetSets: int.tryParse(val) ?? 0)),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: TextFormField(
+                          initialValue: detail.altTargetReps.toString(),
+                          decoration: const InputDecoration(labelText: '替換次數', isDense: true),
+                          keyboardType: TextInputType.number,
+                          onChanged: (val) => onChanged(detail.copyWith(altTargetReps: int.tryParse(val) ?? 0)),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: TextFormField(
+                          initialValue: detail.altTargetWeight.toString(),
+                          decoration: const InputDecoration(labelText: '替換重量', isDense: true),
+                          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                          onChanged: (val) => onChanged(detail.copyWith(altTargetWeight: double.tryParse(val) ?? 0)),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
               )
            ],
          ),

@@ -96,6 +96,8 @@ class _WorkoutManagerState extends State<WorkoutManager> {
   // 3. 結算與計時相關
   TextEditingController noteController = TextEditingController();
   String lastCompletionRate = "0%";
+  List<Map<String, dynamic>> pendingWorkoutLogs = [];
+
 
   // 4. 歷史與成就相關
   List<Map<String, dynamic>> historicalSessions = [];
@@ -327,6 +329,7 @@ class _WorkoutManagerState extends State<WorkoutManager> {
       currentSessionId = const Uuid().v4(); // 初始化新的 session ID
       activeExercise = null;
       activeExerciseIndex = null;
+      pendingWorkoutLogs.clear();
     });
   }
 
@@ -337,13 +340,16 @@ class _WorkoutManagerState extends State<WorkoutManager> {
       activeExerciseIndex = index;
       currentRpe = 8;
 
-      int numSets = ex['target_sets'] ?? 3;
+      int numSets = ex['_current_target_sets'] ?? ex['target_sets'] ?? 3;
+      double targetWeight = (ex['_current_target_weight'] ?? ex['target_weight'] ?? 0).toDouble();
+      int targetReps = ex['_current_target_reps'] ?? ex['target_reps'] ?? 0;
+
       currentSets = List.generate(
         numSets,
         (i) => {
           "set_num": i + 1,
-          "weight": (ex['target_weight'] as num).toDouble(),
-          "reps": ex['target_reps'] as int,
+          "weight": targetWeight,
+          "reps": targetReps,
           "rate": "0%",
         },
       );
@@ -355,7 +361,7 @@ class _WorkoutManagerState extends State<WorkoutManager> {
   // 啟動休息與達成率計算
   void _startRest(int setIdx) {
     final ex = activeExercise!;
-    double targetVol = (ex['target_weight'] * ex['target_reps']).toDouble();
+    double targetVol = ((ex['_current_target_weight'] ?? ex['target_weight'] ?? 0) * (ex['_current_target_reps'] ?? ex['target_reps'] ?? 0)).toDouble();
     double actualVol =
         currentSets[setIdx]['weight'] * currentSets[setIdx]['reps'];
     int rate = targetVol > 0 ? ((actualVol / targetVol) * 100).toInt() : 100;
@@ -383,7 +389,7 @@ class _WorkoutManagerState extends State<WorkoutManager> {
     double totalRateSum = 0;
     for (var s in currentSets) {
       double targetVol =
-          (activeExercise!['target_weight'] * activeExercise!['target_reps'])
+          ((activeExercise!['_current_target_weight'] ?? activeExercise!['target_weight'] ?? 0) * (activeExercise!['_current_target_reps'] ?? activeExercise!['target_reps'] ?? 0))
               .toDouble();
       double actualVol = (s['weight'] * s['reps']).toDouble();
       totalRateSum += (targetVol > 0 ? (actualVol / targetVol) : 0);
@@ -392,29 +398,32 @@ class _WorkoutManagerState extends State<WorkoutManager> {
     double avgRate = (totalRateSum / currentSets.length) * 100;
     String rate = "${avgRate.toStringAsFixed(0)}%";
 
+    double exerciseVolume = 0;
+    for (var s in currentSets) {
+      double w = (s['weight'] as num?)?.toDouble() ?? 0;
+      int r = (s['reps'] as num?)?.toInt() ?? 0;
+      exerciseVolume += (w * r);
+    }
+
     // 2. 準備完整的 logData
     final logData = {
       "user_id": currentUserId,
       "plan_name": selectedPlanName,
-      "exercise_name": activeExercise!['exercise'],
+      "exercise_name": activeExercise!['_current_exercise_name'] ?? activeExercise!['exercise'],
       "weight": (currentSets.last['weight'] as num).toDouble(),
       "reps": (currentSets.last['reps'] as num).toInt(),
       "sets": currentSets.length,
       "set_details": currentSets, // 寫入詳細 JSON 結構
       "session_id": currentSessionId, // 寫入 session_id
       "completion_rate": rate,
-      "volume": (currentSets.last['weight'] * currentSets.last['reps']).toDouble(),
+      "volume": exerciseVolume,
       "rpe": currentRpe,
       "created_at": DateTime.now().toIso8601String(),
     };
 
-    try {
-      await supabase.from('workout_logs').insert(logData);
-      print("✅ 紀錄已同步：$rate, Vol: ${logData['volume']}");
-      print("✅ 紀錄已同步！RPE 為：$currentRpe");
-    } catch (e) {
-      print("❌ 存檔失敗：$e");
-    }
+    // 加入本地暫存，等結算一起送出
+    pendingWorkoutLogs.add(logData);
+    print("✅ 紀錄已暫存：$rate, 總容量: ${logData['volume']}, RPE: $currentRpe");
 
     setState(() {
       exerciseFinalRates[activeExerciseIndex!] = rate;
@@ -1059,36 +1068,79 @@ class _WorkoutManagerState extends State<WorkoutManager> {
         ...List.generate(allExercisesInPlan.length, (index) {
           final ex = allExercisesInPlan[index];
           bool isDone = exerciseCompletion[index] ?? false;
+          
+          bool hasAlt = ex['alt_exercise'] != null && ex['alt_exercise'].toString().isNotEmpty;
+          bool isUsingAlt = ex['_is_using_alt'] == true; // 本地狀態標記是否已切換為替換動作
+
+          // 決定當前顯示的目標數值
+          String displayExName = isUsingAlt ? ex['alt_exercise'] : (ex['exercise'] ?? '動作');
+          int displaySets = isUsingAlt ? (ex['alt_target_sets'] ?? ex['target_sets']) : (ex['target_sets'] ?? 0);
+          int displayReps = isUsingAlt ? (ex['alt_target_reps'] ?? ex['target_reps']) : (ex['target_reps'] ?? 0);
+          num displayWeight = isUsingAlt ? (ex['alt_target_weight'] ?? ex['target_weight']) : (ex['target_weight'] ?? 0);
+
           return Card(
             color: isDone
                 ? Colors.green.withValues(alpha: 0.1)
                 : Colors.white10,
-            child: ListTile(
-              leading: Icon(
-                isDone ? Icons.check_circle : Icons.radio_button_unchecked,
-                color: isDone ? const Color(0xFF00FF41) : Colors.grey,
-              ),
-              title: Text(
-                ex['exercise'] ?? '動作',
-                style: TextStyle(fontFamily: 'Cubic11',color: isDone ? Colors.grey : Colors.white),
-              ),
-              subtitle: isDone
-                  ? Text(
-                      "達成率 : ${exerciseFinalRates[index] ?? '0%'}",
-                      style: TextStyle(fontFamily: 'Cubic11',
-                        color: Colors.orange,
-                        fontSize: 12,
+            child: Column(
+              children: [
+                ListTile(
+                  leading: Icon(
+                    isDone ? Icons.check_circle : Icons.radio_button_unchecked,
+                    color: isDone ? const Color(0xFF00FF41) : Colors.grey,
+                  ),
+                  title: Text(
+                    displayExName,
+                    style: TextStyle(fontFamily: 'Cubic11',color: isDone ? Colors.grey : Colors.white),
+                  ),
+                  subtitle: isDone
+                      ? Text(
+                          "達成率 : ${exerciseFinalRates[index] ?? '0%'}",
+                          style: TextStyle(fontFamily: 'Cubic11',
+                            color: Colors.orange,
+                            fontSize: 12,
+                          ),
+                        )
+                      : Text("$displaySets 組 x $displayReps 下 @ ${displayWeight}kg" + ((ex['target_rpe'] ?? 0) > 0 && (!isUsingAlt) ? " RPE ${ex['target_rpe']}" : ""), style: TextStyle(fontFamily: 'Cubic11', color: Colors.grey, fontSize: 12)),
+                  trailing: isDone
+                      ? null
+                      : const Icon(Icons.play_arrow, color: Color(0xFF00FF41)),
+                  onTap: isDone
+                      ? null
+                      : () {
+                          // 將當前決定好的動作名稱塞回 ex 中，以便後續記錄
+                          ex['_current_exercise_name'] = displayExName;
+                          ex['_current_target_sets'] = displaySets;
+                          ex['_current_target_reps'] = displayReps;
+                          ex['_current_target_weight'] = displayWeight;
+                          _enterExercise(ex, index);
+                        },
+                ),
+                if (!isDone && hasAlt)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 16.0, bottom: 8.0, top: 0),
+                    child: Align(
+                      alignment: Alignment.centerRight,
+                      child: TextButton.icon(
+                        icon: const Icon(Icons.swap_horiz, size: 16, color: Colors.cyanAccent),
+                        label: Text(
+                          isUsingAlt ? "切換回原動作" : "切換替換動作 (${ex['alt_exercise']})", 
+                          style: const TextStyle(fontFamily: 'Cubic11', fontSize: 11, color: Colors.cyanAccent)
+                        ),
+                        onPressed: () {
+                           setState(() {
+                              ex['_is_using_alt'] = !isUsingAlt;
+                           });
+                        },
+                        style: TextButton.styleFrom(
+                           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 0),
+                           minimumSize: Size.zero,
+                           tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        ),
                       ),
-                    )
-                  : Text("${ex['target_sets']} 組 x ${ex['target_reps']} 下 @ ${ex['target_weight']}kg" + ((ex['target_rpe'] ?? 0) > 0 ? " RPE ${ex['target_rpe']}" : ""), style: TextStyle(fontFamily: 'Cubic11', color: Colors.grey, fontSize: 12)),
-              trailing: isDone
-                  ? null
-                  : const Icon(Icons.play_arrow, color: Color(0xFF00FF41)),
-              onTap: isDone
-                  ? null
-                  : () {
-                      _enterExercise(ex, index);
-                    },
+                    ),
+                  ),
+              ],
             ),
           );
         }),
@@ -1292,11 +1344,18 @@ class _WorkoutManagerState extends State<WorkoutManager> {
           ),
           const SizedBox(height: 20),
           ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF00FF41), // 亮綠色
+              foregroundColor: Colors.black, // 黑色文字
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+            ),
             onPressed: () async {
-              // 🚀 3. 按下結束時，把總分和備註送上雲端
+              // 🚀 3. 按下結束時，把暫存紀錄與總分、備註一起送上雲端
               try {
                 String finalRateString = "${finalScore.toStringAsFixed(0)}%";
-                await supabase.from('workout_logs').insert({
+                
+                // 準備最後的結算紀錄
+                final summaryLog = {
                   'user_id': currentUserId,
                   'plan_name': selectedPlanName,
                   'exercise_name': '🏆 副本總結結算', // 🚀 這樣你一眼就能看出哪一行是總結
@@ -1305,15 +1364,29 @@ class _WorkoutManagerState extends State<WorkoutManager> {
                   'notes': noteController.text, // 抓取筆記內容
                   'session_id': currentSessionId, // 掛鉤同一個 session
                   'created_at': DateTime.now().toIso8601String(),
-                });
-                print("✅ 結算存檔成功！");
+                };
+
+                // 合併全部要上傳的資料
+                List<Map<String, dynamic>> allLogsToUpload = List.from(pendingWorkoutLogs);
+                allLogsToUpload.add(summaryLog);
+
+                // 一次上傳
+                await supabase.from('workout_logs').insert(allLogsToUpload);
+                print("✅ 結算與動作紀錄存檔成功！");
+
+                // 刪除該筆課表 (已完成)，避免重複執行
+                if (selectedPlanId.isNotEmpty) {
+                  await supabase.from('workout_plans').delete().eq('id', selectedPlanId);
+                  print("✅ 課表已刪除！");
+                }
               } catch (e) {
-                print("❌ 結算存檔失敗：$e");
+                print("❌ 資料存檔或刪除失敗：$e");
               }
 
               setState(() {
                 isTraining = false;
                 noteController.clear(); // 結束後把筆記擦乾淨，下次用
+                pendingWorkoutLogs.clear();
               });
               
               // 🚀 存檔後立即重新整理紀錄，讓歷史課表能馬上看到這筆資料！
