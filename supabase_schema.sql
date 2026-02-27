@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS public.workout_plans (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   plan_name TEXT NOT NULL,
   user_id UUID NOT NULL, 
+  is_completed BOOLEAN NOT NULL DEFAULT FALSE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 

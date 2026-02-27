@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';import 'dart:async';
 import 'package:flutter_application_1/models/skin.dart';
 import 'package:fl_chart/fl_chart.dart';
@@ -190,6 +191,7 @@ class _WorkoutManagerState extends State<WorkoutManager> {
         .from('workout_plans')
         .select('id, plan_name')
         .eq('user_id', currentUserId)
+        .eq('is_completed', false)
         .order('created_at', ascending: false);
         
     // 2. 抓取歷史課表 (已完成的紀錄)
@@ -361,10 +363,18 @@ class _WorkoutManagerState extends State<WorkoutManager> {
   // 啟動休息與達成率計算
   void _startRest(int setIdx) {
     final ex = activeExercise!;
-    double targetVol = ((ex['_current_target_weight'] ?? ex['target_weight'] ?? 0) * (ex['_current_target_reps'] ?? ex['target_reps'] ?? 0)).toDouble();
-    double actualVol =
-        currentSets[setIdx]['weight'] * currentSets[setIdx]['reps'];
-    int rate = targetVol > 0 ? ((actualVol / targetVol) * 100).toInt() : 100;
+    double targetWeight = (ex['_current_target_weight'] ?? ex['target_weight'] ?? 0).toDouble();
+    int targetReps = ex['_current_target_reps'] ?? ex['target_reps'] ?? 0;
+    
+    double rateValue = 0.0;
+    if (targetWeight > 0) {
+      double targetVol = targetWeight * targetReps;
+      double actualVol = currentSets[setIdx]['weight'] * currentSets[setIdx]['reps'];
+      rateValue = targetVol > 0 ? (actualVol / targetVol) : 1.0;
+    } else {
+      rateValue = targetReps > 0 ? (currentSets[setIdx]['reps'] / targetReps) : 1.0;
+    }
+    int rate = (rateValue * 100).toInt();
 
     setState(() {
       currentSets[setIdx]['rate'] = "$rate%";
@@ -388,11 +398,18 @@ class _WorkoutManagerState extends State<WorkoutManager> {
 
     double totalRateSum = 0;
     for (var s in currentSets) {
-      double targetVol =
-          ((activeExercise!['_current_target_weight'] ?? activeExercise!['target_weight'] ?? 0) * (activeExercise!['_current_target_reps'] ?? activeExercise!['target_reps'] ?? 0))
-              .toDouble();
-      double actualVol = (s['weight'] * s['reps']).toDouble();
-      totalRateSum += (targetVol > 0 ? (actualVol / targetVol) : 0);
+      double targetWeight = (activeExercise!['_current_target_weight'] ?? activeExercise!['target_weight'] ?? 0).toDouble();
+      int targetReps = (activeExercise!['_current_target_reps'] ?? activeExercise!['target_reps'] ?? 0);
+      
+      double rateValue = 0.0;
+      if (targetWeight > 0) {
+        double targetVol = targetWeight * targetReps;
+        double actualVol = (s['weight'] * s['reps']).toDouble();
+        rateValue = targetVol > 0 ? (actualVol / targetVol) : 1.0;
+      } else {
+        rateValue = targetReps > 0 ? (s['reps'] / targetReps) : 1.0;
+      }
+      totalRateSum += rateValue;
     }
 
     double avgRate = (totalRateSum / currentSets.length) * 100;
@@ -402,7 +419,7 @@ class _WorkoutManagerState extends State<WorkoutManager> {
     for (var s in currentSets) {
       double w = (s['weight'] as num?)?.toDouble() ?? 0;
       int r = (s['reps'] as num?)?.toInt() ?? 0;
-      exerciseVolume += (w * r);
+      exerciseVolume += (w > 0) ? (w * r) : (r * 10);
     }
 
     // 2. 準備完整的 logData
@@ -1374,10 +1391,10 @@ class _WorkoutManagerState extends State<WorkoutManager> {
                 await supabase.from('workout_logs').insert(allLogsToUpload);
                 print("✅ 結算與動作紀錄存檔成功！");
 
-                // 刪除該筆課表 (已完成)，避免重複執行
+                // 將該筆課表標示為完成，避免重複執行並保留供教練複製
                 if (selectedPlanId.isNotEmpty) {
-                  await supabase.from('workout_plans').delete().eq('id', selectedPlanId);
-                  print("✅ 課表已刪除！");
+                  await supabase.from('workout_plans').update({'is_completed': true}).eq('id', selectedPlanId);
+                  print("✅ 課表已標示為完成！");
                 }
               } catch (e) {
                 print("❌ 資料存檔或刪除失敗：$e");
@@ -1756,7 +1773,22 @@ class _RestTimerDialogState extends State<RestTimerDialog> {
   Future<void> _triggerVibration() async {
     bool? hasVibrator = await Vibration.hasVibrator();
     if (hasVibrator ?? false) {
-      Vibration.vibrate(duration: 1000);
+      bool? hasCustom = await Vibration.hasCustomVibrationsSupport();
+      if (hasCustom ?? false) {
+        Vibration.vibrate(duration: 1000);
+      } else {
+        // Fallback for iOS (standard vibration or multiple short vibrations)
+        Vibration.vibrate();
+        await Future.delayed(const Duration(milliseconds: 400));
+        Vibration.vibrate();
+        await Future.delayed(const Duration(milliseconds: 400));
+        Vibration.vibrate();
+      }
+    } else {
+      // Final fallback using system HapticFeedback
+      HapticFeedback.heavyImpact();
+      await Future.delayed(const Duration(milliseconds: 400));
+      HapticFeedback.heavyImpact();
     }
   }
 
