@@ -980,72 +980,105 @@ class _WorkoutManagerState extends State<WorkoutManager> {
                     },
                  ),
               ),
-              const SizedBox(height: 40),
+              const SizedBox(height: 16),
               if (spots.isEmpty)
                  const Center(child: Text("此項目無有效數據", style: TextStyle(fontFamily: 'Cubic11', color: Colors.grey)))
-              else
+              else ...[
+                 if (chartData.length > 10)
+                   const Padding(
+                     padding: EdgeInsets.only(bottom: 6),
+                     child: Row(
+                       mainAxisAlignment: MainAxisAlignment.center,
+                       children: [
+                         Icon(Icons.swipe, size: 14, color: Colors.white54),
+                         SizedBox(width: 4),
+                         Text("橫向滑動查看全部", style: TextStyle(color: Colors.white54, fontSize: 11, fontFamily: 'Cubic11')),
+                       ],
+                     ),
+                   ),
                  Expanded(
-                    child: LineChart(
-                       LineChartData(
+                    child: Builder(builder: (context) {
+                      const int windowSize = 10;
+                      final bool needsScroll = chartData.length > windowSize;
+                      final double maxX = needsScroll
+                          ? spots.length.toDouble() - 1
+                          : max(windowSize.toDouble() - 1, 1);
+
+                      Widget chartWidget = LineChart(
+                        LineChartData(
                           gridData: FlGridData(
-                             show: true,
-                             drawVerticalLine: false,
-                             getDrawingHorizontalLine: (value) => FlLine(color: Colors.white10, strokeWidth: 1),
+                            show: true,
+                            drawVerticalLine: false,
+                            getDrawingHorizontalLine: (value) => FlLine(color: Colors.white10, strokeWidth: 1),
                           ),
                           titlesData: FlTitlesData(
-                             leftTitles: AxisTitles(
-                                sideTitles: SideTitles(
-                                   showTitles: true,
-                                   reservedSize: 40,
-                                   getTitlesWidget: (val, meta) => Text(val.toInt().toString(), style: const TextStyle(color: Colors.grey, fontSize: 10)),
-                                )
-                             ),
-                             bottomTitles: AxisTitles(
-                                sideTitles: SideTitles(
-                                   showTitles: true,
-                                   reservedSize: 22,
-                                   interval: 1,
-                                   getTitlesWidget: (value, meta) {
-                                      int idx = value.toInt();
-                                      if (idx >= 0 && idx < chartData.length) {
-                                         final rawDate = chartData[idx]['created_at'] as String?;
-                                         if (rawDate != null && rawDate.length >= 10) {
-                                            final dateStr = rawDate.substring(5, 10).replaceFirst('-', '/');
-                                            return Padding(
-                                               padding: const EdgeInsets.only(top: 5.0),
-                                               child: Text(dateStr, style: const TextStyle(color: Colors.grey, fontSize: 8, fontFamily: 'Cubic11')),
-                                            );
-                                         }
-                                      }
-                                      return const SizedBox.shrink();
-                                   },
-                                )
-                             ),
-                             rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                             topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                            leftTitles: AxisTitles(
+                              sideTitles: SideTitles(
+                                showTitles: true,
+                                reservedSize: 40,
+                                getTitlesWidget: (val, meta) => Text(val.toInt().toString(), style: const TextStyle(color: Colors.grey, fontSize: 10)),
+                              ),
+                            ),
+                            bottomTitles: AxisTitles(
+                              sideTitles: SideTitles(
+                                showTitles: true,
+                                reservedSize: 22,
+                                interval: 1,
+                                getTitlesWidget: (value, meta) {
+                                  int idx = value.toInt();
+                                  if (idx >= 0 && idx < chartData.length) {
+                                    final rawDate = chartData[idx]['created_at'] as String?;
+                                    if (rawDate != null && rawDate.length >= 10) {
+                                      return Padding(
+                                        padding: const EdgeInsets.only(top: 5.0),
+                                        child: Text(rawDate.substring(5,10).replaceFirst('-','/'), style: const TextStyle(color: Colors.grey, fontSize: 8, fontFamily: 'Cubic11')),
+                                      );
+                                    }
+                                  }
+                                  return const SizedBox.shrink();
+                                },
+                              ),
+                            ),
+                            rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                            topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
                           ),
                           borderData: FlBorderData(show: false),
                           minX: 0,
-                          maxX: max(spots.length.toDouble() - 1, 1),
+                          maxX: maxX,
                           minY: 0,
                           maxY: maxVol * 1.2,
                           lineBarsData: [
-                             LineChartBarData(
-                                spots: spots,
-                                isCurved: true,
-                                color: const Color(0xFF00FF41),
-                                barWidth: 3,
-                                isStrokeCapRound: true,
-                                dotData: FlDotData(show: true),
-                                belowBarData: BarAreaData(
-                                   show: true,
-                                   color: const Color(0xFF00FF41).withOpacity(0.2),
-                                ),
-                             ),
+                            LineChartBarData(
+                              spots: spots,
+                              isCurved: true,
+                              color: const Color(0xFF00FF41),
+                              barWidth: 3,
+                              isStrokeCapRound: true,
+                              dotData: const FlDotData(show: true),
+                              belowBarData: BarAreaData(
+                                show: true,
+                                color: const Color(0xFF00FF41).withOpacity(0.2),
+                              ),
+                            ),
                           ],
-                       ),
-                    ),
+                        ),
+                      );
+
+                      if (needsScroll) {
+                        final double chartWidth = spots.length * 44.0;
+                        return InteractiveViewer(
+                          constrained: false,
+                          scaleEnabled: true,
+                          child: SingleChildScrollView(
+                            scrollDirection: Axis.horizontal,
+                            child: SizedBox(width: chartWidth, child: chartWidget),
+                          ),
+                        );
+                      }
+                      return chartWidget;
+                    }),
                  ),
+              ],
               const SizedBox(height: 20),
               Text(
                 "說明：縱軸為該動作的最高重量 (若無重量則為次數)\\n橫軸為歷史訓練次數 (由左至右為舊到新)",
