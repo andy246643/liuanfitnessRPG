@@ -1,0 +1,20 @@
+{
+    "name": "Liuan Fitness RPG",
+    "short_name": "健身RPG",
+    "start_url": ".",
+    "display": "standalone",
+    "background_color": "#000000",
+    "theme_color": "#00FF41",
+    "icons": [
+        {
+            "src": "icons/Icon-512.png",
+            "sizes": "192x192",
+            "type": "image/png"
+        },
+        {
+            "src": "icons/Icon-512.png",
+            "sizes": "512x512",
+            "type": "image/png"
+        }
+    ]
+}
