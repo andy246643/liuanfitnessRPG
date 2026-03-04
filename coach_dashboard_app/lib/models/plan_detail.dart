@@ -1,19 +1,27 @@
 class PlanDetail {
   final String? id;
-  final String? planId; // Changed to nullable in case it's a new unsaved plan
+  final String? planId;
   final String exercise;
   final num targetWeight;
   final int targetSets;
   final int targetReps;
   final int targetRpe;
   final int restTimeSeconds;
-  final int orderIndex; // 加入 order_index 確保動作順序
+  final int orderIndex;
 
-  // 替換動作欄位
   final String? altExercise;
   final num altTargetWeight;
   final int altTargetSets;
   final int altTargetReps;
+
+  // 舊熱身組欄位（保留相容性）
+  final List<Map<String, dynamic>> warmupSets;
+
+  // 完整組別設定 [{weight, reps}, ...]，每條對應 1 組
+  final List<Map<String, dynamic>> prescribedSets;
+
+  // 替換動作的完整組別設定
+  final List<Map<String, dynamic>> altPrescribedSets;
 
   PlanDetail({
     this.id,
@@ -23,18 +31,42 @@ class PlanDetail {
     this.targetSets = 0,
     this.targetReps = 0,
     this.targetRpe = 0,
-    this.restTimeSeconds = 60, // 預設 60 秒休息
+    this.restTimeSeconds = 60,
     required this.orderIndex,
     this.altExercise,
     this.altTargetWeight = 0,
     this.altTargetSets = 0,
     this.altTargetReps = 0,
+    this.warmupSets = const [],
+    this.prescribedSets = const [],
+    this.altPrescribedSets = const [],
   });
 
-  // 自動計算總訓練量
-  num get targetVolume => targetWeight * targetSets * targetReps;
+  // 訓練量：prescribed_sets 非空時加總每組 weight×reps；否則舊算法
+  num get targetVolume {
+    if (prescribedSets.isNotEmpty) {
+      return prescribedSets.fold<num>(0, (sum, ps) {
+        final w = (ps['weight'] as num?) ?? 0;
+        final r = (ps['reps'] as num?) ?? 0;
+        return sum + w * r;
+      });
+    }
+    final mainVolume = targetWeight * targetSets * targetReps;
+    final warmupVolume = warmupSets.fold<num>(0, (sum, ws) {
+      final w = (ws['weight'] as num?) ?? 0;
+      final r = (ws['reps'] as num?) ?? 0;
+      return sum + w * r;
+    });
+    return mainVolume + warmupVolume;
+  }
 
   factory PlanDetail.fromJson(Map<String, dynamic> json) {
+    List<Map<String, dynamic>> parseList(dynamic raw) {
+      if (raw is List) {
+        return raw.where((e) => e != null && e is Map).map((e) => Map<String, dynamic>.from(e as Map)).toList();
+      }
+      return [];
+    }
     return PlanDetail(
       id: json['id'] as String?,
       planId: json['plan_id'] as String?,
@@ -49,6 +81,9 @@ class PlanDetail {
       altTargetWeight: (json['alt_target_weight'] as num?)?.toDouble() ?? 0,
       altTargetSets: json['alt_target_sets'] as int? ?? 0,
       altTargetReps: json['alt_target_reps'] as int? ?? 0,
+      warmupSets: parseList(json['warmup_sets']),
+      prescribedSets: parseList(json['prescribed_sets']),
+      altPrescribedSets: parseList(json['alt_prescribed_sets']),
     );
   }
 
@@ -65,17 +100,15 @@ class PlanDetail {
       'alt_target_weight': altTargetWeight,
       'alt_target_sets': altTargetSets,
       'alt_target_reps': altTargetReps,
+      'warmup_sets': warmupSets,
+      'prescribed_sets': prescribedSets,
+      'alt_prescribed_sets': altPrescribedSets,
     };
-    if (id != null) {
-      map['id'] = id!;
-    }
-    if (planId != null) {
-      map['plan_id'] = planId!;
-    }
+    if (id != null) map['id'] = id!;
+    if (planId != null) map['plan_id'] = planId!;
     return map;
   }
 
-  // 用於編輯時複製自身並修改屬性，方便狀態管理
   PlanDetail copyWith({
     String? id,
     String? planId,
@@ -90,6 +123,9 @@ class PlanDetail {
     num? altTargetWeight,
     int? altTargetSets,
     int? altTargetReps,
+    List<Map<String, dynamic>>? warmupSets,
+    List<Map<String, dynamic>>? prescribedSets,
+    List<Map<String, dynamic>>? altPrescribedSets,
   }) {
     return PlanDetail(
       id: id ?? this.id,
@@ -101,20 +137,20 @@ class PlanDetail {
       targetRpe: targetRpe ?? this.targetRpe,
       restTimeSeconds: restTimeSeconds ?? this.restTimeSeconds,
       orderIndex: orderIndex ?? this.orderIndex,
-      // 如果明確給 null，表示要清除替換動作，這裡透過一個小技巧或直接接受 null 若為可選
-      // 這裡簡化處理，如果需要強制清空可透過特定 string 標記，但此處維持一般 copyWith 邏輯
       altExercise: altExercise != null ? (altExercise.isEmpty ? null : altExercise) : this.altExercise,
       altTargetWeight: altTargetWeight ?? this.altTargetWeight,
       altTargetSets: altTargetSets ?? this.altTargetSets,
       altTargetReps: altTargetReps ?? this.altTargetReps,
+      warmupSets: warmupSets ?? this.warmupSets,
+      prescribedSets: prescribedSets ?? this.prescribedSets,
+      altPrescribedSets: altPrescribedSets ?? this.altPrescribedSets,
     );
   }
 
-  // Helper method to create a clone for a new plan (clears IDs)
   PlanDetail cloneForNewPlan(String newPlanId, {int? newOrderIndex}) {
     return PlanDetail(
-      id: null, // Clear original ID
-      planId: newPlanId, // Set to new plan ID
+      id: null,
+      planId: newPlanId,
       exercise: exercise,
       targetWeight: targetWeight,
       targetSets: targetSets,
@@ -126,6 +162,9 @@ class PlanDetail {
       altTargetWeight: altTargetWeight,
       altTargetSets: altTargetSets,
       altTargetReps: altTargetReps,
+      warmupSets: warmupSets.isNotEmpty ? List<Map<String, dynamic>>.from(warmupSets) : [],
+      prescribedSets: prescribedSets.isNotEmpty ? List<Map<String, dynamic>>.from(prescribedSets) : [],
+      altPrescribedSets: altPrescribedSets.isNotEmpty ? List<Map<String, dynamic>>.from(altPrescribedSets) : [],
     );
   }
 }

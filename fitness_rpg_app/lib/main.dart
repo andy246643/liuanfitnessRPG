@@ -7,9 +7,19 @@ import 'package:fl_chart/fl_chart.dart';
 import 'dart:math';
 import 'package:uuid/uuid.dart';
 import 'package:vibration/vibration.dart';
+import 'package:audioplayers/audioplayers.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // 設置系統狀態列樣式（避免手機出現奇怪顏色橫幅）
+  SystemChrome.setSystemUIOverlayStyle(
+    const SystemUiOverlayStyle(
+      statusBarColor: Colors.transparent,
+      statusBarIconBrightness: Brightness.dark,
+      statusBarBrightness: Brightness.light,
+    ),
+  );
 
   // 安全地讀取環境變數
   const supabaseUrl = String.fromEnvironment('SUPABASE_URL');
@@ -98,6 +108,11 @@ ThemeData _buildLongevityTheme() {
       backgroundColor: ZenColors.background,
       foregroundColor: ZenColors.sageGreen,
       elevation: 0,
+      systemOverlayStyle: SystemUiOverlayStyle(
+        statusBarColor: Colors.transparent,
+        statusBarIconBrightness: Brightness.dark,
+        statusBarBrightness: Brightness.light,
+      ),
     ),
   );
 }
@@ -197,13 +212,16 @@ class _WorkoutManagerState extends State<WorkoutManager> {
 
   // 1. 登入並抓取計畫 (需教練與學員名稱相符)
   Future<void> _loginAndFetchPlans() async {
-    final traineeName = currentUserName.trim();
+    // 先從 controller 讀取並同步到 state
+    currentUserName = nameController.text.trim();
+    final traineeName = currentUserName;
     final coachName = coachNameController.text.trim();
 
     if (traineeName.isEmpty || coachName.isEmpty) {
       _showLoginError("請輸入冒險者與教練名稱！");
       return;
     }
+
 
     try {
       // 1. 先找教練
@@ -260,9 +278,63 @@ class _WorkoutManagerState extends State<WorkoutManager> {
       SnackBar(
         content: Text(message, style: TextStyle(fontFamily: fFam, color: txtCol)),
         backgroundColor: Colors.red.shade800,
-        duration:  Duration(seconds: 3),
+        duration: const Duration(seconds: 3),
       ),
     );
+  }
+
+  // 刪除課表
+  Future<void> _deletePlan(Map<String, dynamic> plan) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: cardBgCol,
+        title: Text("確認刪除", style: TextStyle(fontFamily: fFam, color: txtCol)),
+        content: Text(
+          "確定要刪除「${plan['plan_name'] ?? '未命名課表'}」？刪除後無法復原。",
+          style: TextStyle(fontFamily: fFam, color: dimCol, fontSize: 15),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text("取消", style: TextStyle(fontFamily: fFam, color: Colors.grey)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text("刪除", style: TextStyle(fontFamily: fFam, color: Colors.white, fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    try {
+      await supabase.from('workout_plans').delete().eq('id', plan['id']);
+      setState(() {
+        allPlans.removeWhere((p) => p['id'] == plan['id']);
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text("課表「${plan['plan_name']}」已刪除", style: TextStyle(fontFamily: fFam)),
+            backgroundColor: Colors.red.shade700,
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      }
+    } catch (e) {
+      print('❌ 刪除課表失敗: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('刪除失敗，請稍後再試', style: TextStyle(fontFamily: fFam)),
+            backgroundColor: Colors.red.shade800,
+          ),
+        );
+      }
+    }
   }
 
   // 抓取所有計畫
@@ -415,7 +487,7 @@ class _WorkoutManagerState extends State<WorkoutManager> {
   Future<void> _startWorkout(Map<String, dynamic> plan) async {
     final response = await supabase
         .from('plan_details')
-        .select('*, rest_time_seconds')
+        .select('*, rest_time_seconds, warmup_sets, prescribed_sets, alt_prescribed_sets')
         .eq('plan_id', plan['id'])
         .order('order_index', ascending: true);
     setState(() {
@@ -437,41 +509,74 @@ class _WorkoutManagerState extends State<WorkoutManager> {
       activeExercise = ex;
       activeExerciseIndex = index;
       currentRpe = 8;
+      
+      // 判斷目前是否正在使用替換動作
+      final isAlt = ex['_is_alt'] == true;
+      
+      final rawPrescribed = isAlt ? ex['alt_prescribed_sets'] : ex['prescribed_sets'];
+      final prescribedSets = rawPrescribed is List ? rawPrescribed : [];
 
-      int numSets = ex['_current_target_sets'] ?? ex['target_sets'] ?? 3;
-      double targetWeight =
-          (ex['_current_target_weight'] ?? ex['target_weight'] ?? 0).toDouble();
-      int targetReps = ex['_current_target_reps'] ?? ex['target_reps'] ?? 0;
+      if (prescribedSets.isNotEmpty) {
+        currentSets = List.generate(
+          prescribedSets.length,
+          (i) {
+            final ps = prescribedSets[i] as Map;
+            return {
+              "set_num": i + 1,
+              "weight": (ps['weight'] as num?)?.toDouble() ?? 0.0,
+              "reps": (ps['reps'] as num?)?.toInt() ?? 0,
+              "rate": "0%",
+            };
+          }
+        );
+      } else {
+        int numSets = ex['_current_target_sets'] ?? ex['target_sets'] ?? 3;
+        double targetWeight =
+            (ex['_current_target_weight'] ?? ex['target_weight'] ?? 0).toDouble();
+        int targetReps = ex['_current_target_reps'] ?? ex['target_reps'] ?? 0;
 
-      currentSets = List.generate(
-        numSets,
-        (i) => {
-          "set_num": i + 1,
-          "weight": targetWeight,
-          "reps": targetReps,
-          "rate": "0%",
-        },
-      );
+        currentSets = List.generate(
+          numSets,
+          (i) => {
+            "set_num": i + 1,
+            "weight": targetWeight,
+            "reps": targetReps,
+            "rate": "0%",
+          },
+        );
+      }
     });
   }
 
   // 啟動休息與達成率計算
   void _startRest(int setIdx) {
     final ex = activeExercise!;
-    double targetWeight =
-        (ex['_current_target_weight'] ?? ex['target_weight'] ?? 0).toDouble();
-    int targetReps = ex['_current_target_reps'] ?? ex['target_reps'] ?? 0;
+    final isAlt = ex['_is_alt'] == true;
+    final prescribedSets = (isAlt ? ex['alt_prescribed_sets'] : ex['prescribed_sets']) as List?;
+
+    double targetWeight = 0;
+    int targetReps = 0;
+
+    if (prescribedSets != null && setIdx < prescribedSets.length) {
+      final ps = prescribedSets[setIdx] as Map?;
+      if (ps != null) {
+        targetWeight = (ps['weight'] as num?)?.toDouble() ?? 0.0;
+        targetReps = (ps['reps'] as num?)?.toInt() ?? 0;
+      }
+    } else {
+      targetWeight = (ex['_current_target_weight'] ?? ex['target_weight'] ?? 0).toDouble();
+      targetReps = ex['_current_target_reps'] ?? ex['target_reps'] ?? 0;
+    }
 
     double rateValue = 0.0;
     if (targetWeight > 0) {
       double targetVol = targetWeight * targetReps;
-      double actualVol =
-          currentSets[setIdx]['weight'] * currentSets[setIdx]['reps'];
+      double actualVol = currentSets[setIdx]['weight'] * currentSets[setIdx]['reps'];
       rateValue = targetVol > 0 ? (actualVol / targetVol) : 1.0;
+      print("DEBUG _startRest (idx: $setIdx) -> targetWeight: $targetWeight, targetReps: $targetReps, targetVol: $targetVol, actual: $actualVol => rate: $rateValue");
     } else {
-      rateValue = targetReps > 0
-          ? (currentSets[setIdx]['reps'] / targetReps)
-          : 1.0;
+      rateValue = targetReps > 0 ? (currentSets[setIdx]['reps'] / targetReps) : 1.0;
+      print("DEBUG _startRest (idx: $setIdx) -> targetWeight: 0, targetReps: $targetReps => rate: $rateValue");
     }
     int rate = (rateValue * 100).toInt();
 
@@ -480,7 +585,13 @@ class _WorkoutManagerState extends State<WorkoutManager> {
       lastCompletionRate = "$rate%";
     });
 
-    int restTimeSeconds = ex['rest_time_seconds'] ?? 60; // 優先使用資料庫設定的秒數，預設 60 秒
+    int restTimeSeconds = ex['rest_time_seconds'] ?? 60;
+    if (prescribedSets != null && setIdx < prescribedSets.length) {
+      final ps = prescribedSets[setIdx] as Map?;
+      if (ps != null && ps['rest_time'] != null) {
+        restTimeSeconds = (ps['rest_time'] as num).toInt();
+      }
+    }
 
     showDialog(
       context: context,
@@ -495,23 +606,34 @@ class _WorkoutManagerState extends State<WorkoutManager> {
   Future<void> _completeActiveExercise() async {
     if (activeExercise == null || activeExerciseIndex == null) return;
 
+    final ex = activeExercise!;
+    final isAlt = ex['_is_alt'] == true;
+    final prescribedSets = (isAlt ? ex['alt_prescribed_sets'] : ex['prescribed_sets']) as List?;
+
     double totalRateSum = 0;
-    for (var s in currentSets) {
-      double targetWeight =
-          (activeExercise!['_current_target_weight'] ??
-                  activeExercise!['target_weight'] ??
-                  0)
-              .toDouble();
-      int targetReps =
-          (activeExercise!['_current_target_reps'] ??
-          activeExercise!['target_reps'] ??
-          0);
+    for (int i = 0; i < currentSets.length; i++) {
+      var s = currentSets[i];
+      
+      double targetWeight = 0;
+      int targetReps = 0;
+
+      if (prescribedSets != null && i < prescribedSets.length) {
+        final ps = prescribedSets[i] as Map?;
+        if (ps != null) {
+          targetWeight = (ps['weight'] as num?)?.toDouble() ?? 0.0;
+          targetReps = (ps['reps'] as num?)?.toInt() ?? 0;
+        }
+      } else {
+        targetWeight = (ex['_current_target_weight'] ?? ex['target_weight'] ?? 0).toDouble();
+        targetReps = ex['_current_target_reps'] ?? ex['target_reps'] ?? 0;
+      }
 
       double rateValue = 0.0;
       if (targetWeight > 0) {
         double targetVol = targetWeight * targetReps;
         double actualVol = (s['weight'] * s['reps']).toDouble();
         rateValue = targetVol > 0 ? (actualVol / targetVol) : 1.0;
+        print("DEBUG _complete (idx: $i) -> targetVol: $targetVol, actual: $actualVol => rate: $rateValue");
       } else {
         rateValue = targetReps > 0 ? (s['reps'] / targetReps) : 1.0;
       }
@@ -519,6 +641,7 @@ class _WorkoutManagerState extends State<WorkoutManager> {
     }
 
     double avgRate = (totalRateSum / currentSets.length) * 100;
+    print("DEBUG _complete -> avgRate: $avgRate");
     String rate = "${avgRate.toStringAsFixed(0)}%";
 
     double exerciseVolume = 0;
@@ -576,7 +699,21 @@ class _WorkoutManagerState extends State<WorkoutManager> {
       totalSessionRate = sum / exerciseFinalRates.length;
     }
 
-    return Scaffold(
+    final overlayStyle = isRpgMode.value
+        ? const SystemUiOverlayStyle(
+            statusBarColor: Colors.transparent,
+            statusBarIconBrightness: Brightness.light,
+            statusBarBrightness: Brightness.dark,
+          )
+        : const SystemUiOverlayStyle(
+            statusBarColor: Colors.transparent,
+            statusBarIconBrightness: Brightness.dark,
+            statusBarBrightness: Brightness.light,
+          );
+
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: overlayStyle,
+      child: Scaffold(
       backgroundColor: bgCol,
       body: SafeArea(
         child: Column(
@@ -584,28 +721,8 @@ class _WorkoutManagerState extends State<WorkoutManager> {
             if (currentUserId.isEmpty)
               Expanded(child: _buildLoginForm())
             else ...[
-              // Zen Dashboard Welcoming (Only in Longevity mode)
-              if (!isRpgMode.value) ...[
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(28, 40, 24, 8),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Text("早安, ${currentUserName != "" ? currentUserName : "冒險者"}", 
-                           style: TextStyle(color: ZenColors.textLight, fontSize: 16)),
-                      const SizedBox(height: 8),
-                      Text(
-                        "保持平靜，持續運動",
-                        style: TextStyle(
-                          color: ZenColors.textDark,
-                          fontSize: 28,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
+
+              if (!isRpgMode.value) const SizedBox(height: 16),
               _buildCharHeader(),
               Expanded(
                 child: !isTraining
@@ -626,27 +743,35 @@ class _WorkoutManagerState extends State<WorkoutManager> {
                   BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 20, offset: const Offset(0, -5))
                 ],
               ),
-              child: BottomNavigationBar(
-                currentIndex: currentDashboardIndex,
-                onTap: (idx) => setState(() => currentDashboardIndex = idx),
-                backgroundColor: Colors.white,
-                selectedItemColor: ZenColors.sageGreen,
-                unselectedItemColor: ZenColors.textLight.withOpacity(0.5),
-                type: BottomNavigationBarType.fixed,
-                elevation: 0,
-                selectedLabelStyle: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
-                unselectedLabelStyle: const TextStyle(fontSize: 12),
-                items: const [
-                  BottomNavigationBarItem(icon: Icon(Icons.dashboard_rounded), label: "大廳"),
-                  BottomNavigationBarItem(icon: Icon(Icons.fitness_center), label: "計畫"),
-                  BottomNavigationBarItem(icon: Icon(Icons.history), label: "紀錄"),
-                  BottomNavigationBarItem(icon: Icon(Icons.bar_chart), label: "數據"),
-                ],
+              child: SafeArea(
+                top: false,
+                child: BottomNavigationBar(
+                  currentIndex: currentDashboardIndex,
+                  onTap: (idx) => setState(() => currentDashboardIndex = idx),
+                  backgroundColor: Colors.white,
+                  selectedItemColor: ZenColors.sageGreen,
+                  unselectedItemColor: ZenColors.textLight.withOpacity(0.5),
+                  type: BottomNavigationBarType.fixed,
+                  elevation: 0,
+                  iconSize: 28,
+                  selectedFontSize: 14,
+                  unselectedFontSize: 13,
+                  selectedLabelStyle: const TextStyle(fontWeight: FontWeight.bold),
+                  unselectedLabelStyle: const TextStyle(),
+                  items: const [
+                    BottomNavigationBarItem(icon: Padding(padding: EdgeInsets.only(bottom: 2), child: Icon(Icons.dashboard_rounded)), label: "大廳"),
+                    BottomNavigationBarItem(icon: Padding(padding: EdgeInsets.only(bottom: 2), child: Icon(Icons.fitness_center)), label: "計畫"),
+                    BottomNavigationBarItem(icon: Padding(padding: EdgeInsets.only(bottom: 2), child: Icon(Icons.history)), label: "紀錄"),
+                    BottomNavigationBarItem(icon: Padding(padding: EdgeInsets.only(bottom: 2), child: Icon(Icons.bar_chart)), label: "數據"),
+                  ],
+                ),
               ),
             )
           : null,
+      ),
     );
   }
+
 
   // 顯示個人資料設定對話框
   void _showProfileDialog() {
@@ -796,14 +921,81 @@ class _WorkoutManagerState extends State<WorkoutManager> {
 
   // 頂部等級條
   Widget _buildCharHeader() {
+    // 長壽模式：更緊湊、適合老人閱讀的版面
+    if (!isRpgMode.value) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 6),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          decoration: BoxDecoration(
+            color: ZenColors.sageGreen,
+            borderRadius: BorderRadius.circular(20),
+            boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.08), blurRadius: 12, offset: const Offset(0, 4))],
+          ),
+          child: Row(
+            children: [
+              GestureDetector(
+                onLongPress: () {
+                  isRpgMode.value = !isRpgMode.value;
+                  HapticFeedback.heavyImpact();
+                },
+                child: Container(
+                  width: 44,
+                  height: 44,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.25),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(Icons.person_outline, color: Colors.white, size: 26),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      currentUserName,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 22,
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: 0.5,
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      "累計訓練量 ${totalVolume.toStringAsFixed(0)} kg",
+                      style: TextStyle(
+                        color: Colors.white.withOpacity(0.8),
+                        fontSize: 13,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              IconButton(
+                icon: Icon(Icons.manage_accounts, color: Colors.white.withOpacity(0.85), size: 24),
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                onPressed: () => _showProfileDialog(),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    // RPG 模式：原始設計
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
       child: ZenCard(
-        color: isRpgMode.value ? cardBgCol : ZenColors.sageGreen,
+        color: cardBgCol,
         padding: 20,
         child: Row(
           children: [
-            // --- 1. 左側：自動偵測頭像區 (長壽模式隱藏 GIF) ---
             ValueListenableBuilder<Skin>(
               valueListenable: currentSkin,
               builder: (context, skin, child) {
@@ -811,7 +1003,7 @@ class _WorkoutManagerState extends State<WorkoutManager> {
                   onTap: () {
                     showDialog(
                       context: context,
-                      builder: (context) =>  SkinSelectionModal(),
+                      builder: (context) => SkinSelectionModal(),
                     );
                   },
                   onLongPress: () {
@@ -824,28 +1016,22 @@ class _WorkoutManagerState extends State<WorkoutManager> {
                     decoration: BoxDecoration(
                       color: Colors.white.withOpacity(0.2),
                       shape: BoxShape.circle,
-                      border: isRpgMode.value ? Border.all(color: pCol, width: 2) : null,
+                      border: Border.all(color: pCol, width: 2),
                     ),
-                    child: isRpgMode.value 
-                      ? ClipOval(
-                          child: Image.asset(
-                            skin.imagePath,
-                            fit: BoxFit.cover,
-                            errorBuilder: (context, error, stackTrace) {
-                              return Image.asset(
-                                'assets/images/novice.png', 
-                                fit: BoxFit.cover,
-                              );
-                            },
-                          ),
-                        )
-                      : const Icon(Icons.person_outline, color: Colors.white, size: 30), // 長壽模式顯示簡約圖標或空白
+                    child: ClipOval(
+                      child: Image.asset(
+                        skin.imagePath,
+                        fit: BoxFit.cover,
+                        errorBuilder: (context, error, stackTrace) {
+                          return Image.asset('assets/images/novice.png', fit: BoxFit.cover);
+                        },
+                      ),
+                    ),
                   ),
                 );
               },
             ),
-             SizedBox(width: 20),
-            // --- 2. 右側：資訊 ---
+            const SizedBox(width: 20),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -854,8 +1040,8 @@ class _WorkoutManagerState extends State<WorkoutManager> {
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       Text(
-                        (isRpgMode.value ? "⚔️ 冒險者：$currentUserName" : "👤 名字：$currentUserName"),
-                        style: TextStyle(fontFamily: fFam, 
+                        "⚔️ 冒險者：$currentUserName",
+                        style: TextStyle(fontFamily: fFam,
                           color: Colors.white,
                           fontSize: 20,
                           fontWeight: FontWeight.bold,
@@ -867,9 +1053,9 @@ class _WorkoutManagerState extends State<WorkoutManager> {
                       ),
                     ],
                   ),
-                   SizedBox(height: 4),
+                  const SizedBox(height: 4),
                   Container(
-                    padding:  EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                     decoration: BoxDecoration(
                       color: Colors.white.withOpacity(0.2),
                       borderRadius: BorderRadius.circular(16),
@@ -877,8 +1063,8 @@ class _WorkoutManagerState extends State<WorkoutManager> {
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Icon(Icons.flash_on, color: Colors.white, size: 16),
-                         SizedBox(width: 4),
+                        const Icon(Icons.flash_on, color: Colors.white, size: 16),
+                        const SizedBox(width: 4),
                         Text(
                           "訓練量: ${totalVolume.toStringAsFixed(0)} kg",
                           style: TextStyle(fontFamily: fFam, color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600),
@@ -961,147 +1147,157 @@ class _WorkoutManagerState extends State<WorkoutManager> {
     }
 
     return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(24, 12, 24, 24),
+      padding: const EdgeInsets.fromLTRB(20, 16, 20, 32),
       child: Column(
         children: [
           // 1. Hero Card: Earliest Plan
           ZenCard(
             color: ZenColors.sageGreen,
-            padding: 24,
+            padding: 28,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Text("推薦計畫", style: TextStyle(color: Colors.white.withOpacity(0.85), fontSize: 13)),
-                    Icon(Icons.fitness_center, color: Colors.white.withOpacity(0.85), size: 18),
+                    Text("推薦計畫", style: TextStyle(color: Colors.white.withOpacity(0.85), fontSize: 16)),
+                    Icon(Icons.fitness_center, color: Colors.white.withOpacity(0.85), size: 22),
                   ],
                 ),
-                const SizedBox(height: 10),
-                Text(
-                  earliestPlan != null ? earliestPlan['plan_name'] ?? '未命名課表' : '暫無計畫',
-                  style: const TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold),
-                ),
-                const SizedBox(height: 20),
-                ElevatedButton(
-                  onPressed: () {
-                    if (earliestPlan != null) {
-                      _startWorkout(earliestPlan);
-                    } else {
-                      setState(() => currentDashboardIndex = 1);
-                    }
-                  },
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.white,
-                    foregroundColor: ZenColors.sageGreen,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                const SizedBox(height: 12),
+                if (earliestPlan != null) ...[
+                  Text(
+                    earliestPlan['plan_name'] ?? '未命名課表',
+                    style: const TextStyle(color: Colors.white, fontSize: 28, fontWeight: FontWeight.bold),
                   ),
-                  child: const Text("立即開始", style: TextStyle(fontWeight: FontWeight.bold)),
-                ),
+                  const SizedBox(height: 24),
+                  ElevatedButton(
+                    onPressed: () => _startWorkout(earliestPlan),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.white,
+                      foregroundColor: ZenColors.sageGreen,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                      padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
+                      textStyle: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                    ),
+                    child: const Text("立即開始"),
+                  ),
+                ] else ...[
+                  const SizedBox(height: 8),
+                  const Text(
+                    "恭喜已完成所有訓練！",
+                    style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    "請好好休息保養身體 🌿",
+                    style: TextStyle(color: Colors.white.withOpacity(0.85), fontSize: 17),
+                  ),
+                ],
               ],
             ),
           ),
 
           const SizedBox(height: 20),
 
+          const SizedBox(height: 20),
+
           // 2. Unified Analytics Card
           ZenCard(
-            padding: 20,
+            padding: 24,
             child: Column(
               children: [
                 // Header
                 Row(
                   children: [
-                    Icon(Icons.insights_rounded, color: ZenColors.sageGreen, size: 18),
-                    const SizedBox(width: 8),
-                    Text("訓練概況", style: TextStyle(color: ZenColors.textDark, fontSize: 14, fontWeight: FontWeight.bold)),
+                    Icon(Icons.insights_rounded, color: ZenColors.sageGreen, size: 22),
+                    const SizedBox(width: 10),
+                    Text("訓練概況", style: TextStyle(color: ZenColors.textDark, fontSize: 18, fontWeight: FontWeight.bold)),
                   ],
                 ),
-                const SizedBox(height: 16),
+                const SizedBox(height: 20),
                 const Divider(height: 1, thickness: 0.8),
-                const SizedBox(height: 16),
+                const SizedBox(height: 20),
 
                 // Metric A: Last Workout
                 Row(
                   children: [
                     Container(
-                      width: 36, height: 36,
+                      width: 48, height: 48,
                       decoration: BoxDecoration(
                         color: ZenColors.sageGreen.withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(10),
+                        borderRadius: BorderRadius.circular(14),
                       ),
-                      child: Icon(Icons.access_time_rounded, color: ZenColors.sageGreen, size: 18),
+                      child: Icon(Icons.access_time_rounded, color: ZenColors.sageGreen, size: 24),
                     ),
-                    const SizedBox(width: 12),
+                    const SizedBox(width: 16),
                     Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text("上次運動", style: TextStyle(color: ZenColors.textLight, fontSize: 11)),
+                        Text("上次運動", style: TextStyle(color: ZenColors.textLight, fontSize: 14)),
                         Text(lastWorkoutLabel,
-                            style: TextStyle(color: ZenColors.textDark, fontSize: 16, fontWeight: FontWeight.bold)),
+                            style: TextStyle(color: ZenColors.textDark, fontSize: 22, fontWeight: FontWeight.bold)),
                       ],
                     ),
                   ],
                 ),
-                const SizedBox(height: 14),
+                const SizedBox(height: 20),
 
                 // Metric B: Monthly Frequency
                 Row(
                   children: [
                     Container(
-                      width: 36, height: 36,
+                      width: 48, height: 48,
                       decoration: BoxDecoration(
                         color: ZenColors.sageGreen.withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(10),
+                        borderRadius: BorderRadius.circular(14),
                       ),
-                      child: Icon(Icons.event_repeat, color: ZenColors.sageGreen, size: 18),
+                      child: Icon(Icons.event_repeat, color: ZenColors.sageGreen, size: 24),
                     ),
-                    const SizedBox(width: 12),
+                    const SizedBox(width: 16),
                     Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text("近30天運動頻率", style: TextStyle(color: ZenColors.textLight, fontSize: 11)),
+                        Text("近30天運動頻率", style: TextStyle(color: ZenColors.textLight, fontSize: 14)),
                         Text('$monthlyCount 次',
-                            style: TextStyle(color: ZenColors.textDark, fontSize: 16, fontWeight: FontWeight.bold)),
+                            style: TextStyle(color: ZenColors.textDark, fontSize: 22, fontWeight: FontWeight.bold)),
                       ],
                     ),
                   ],
                 ),
-                const SizedBox(height: 14),
+                const SizedBox(height: 20),
 
                 // Metric C: Avg Completion Rate
                 Row(
                   children: [
                     Container(
-                      width: 36, height: 36,
+                      width: 48, height: 48,
                       decoration: BoxDecoration(
                         color: ZenColors.sageGreen.withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(10),
+                        borderRadius: BorderRadius.circular(14),
                       ),
-                      child: Icon(Icons.verified_outlined, color: ZenColors.sageGreen, size: 18),
+                      child: Icon(Icons.verified_outlined, color: ZenColors.sageGreen, size: 24),
                     ),
-                    const SizedBox(width: 12),
+                    const SizedBox(width: 16),
                     Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text("近30天平均完成率", style: TextStyle(color: ZenColors.textLight, fontSize: 11)),
+                          Text("近30天平均完成率", style: TextStyle(color: ZenColors.textLight, fontSize: 14)),
                           Row(
                             children: [
                               Text(
                                 rates.isEmpty ? '尚無資料' : '${monthlyAvgRate.toStringAsFixed(0)}%',
-                                style: TextStyle(color: ZenColors.textDark, fontSize: 16, fontWeight: FontWeight.bold),
+                                style: TextStyle(color: ZenColors.textDark, fontSize: 22, fontWeight: FontWeight.bold),
                               ),
                               if (rates.isNotEmpty) ...[  
-                                const SizedBox(width: 8),
+                                const SizedBox(width: 12),
                                 Expanded(
                                   child: ClipRRect(
-                                    borderRadius: BorderRadius.circular(4),
+                                    borderRadius: BorderRadius.circular(6),
                                     child: LinearProgressIndicator(
                                       value: monthlyAvgRate / 100,
-                                      minHeight: 6,
+                                      minHeight: 8,
                                       backgroundColor: ZenColors.sageGreen.withOpacity(0.15),
                                       valueColor: AlwaysStoppedAnimation<Color>(ZenColors.sageGreen),
                                     ),
@@ -1272,19 +1468,46 @@ class _WorkoutManagerState extends State<WorkoutManager> {
         ...allPlans.map(
           (plan) => Padding(
             padding: const EdgeInsets.only(bottom: 16),
-            child: ZenCard(
-              padding: 12,
-              child: ListTile(
-                title: Text(
-                  plan['plan_name'] ?? '未命名課表',
-                  style: TextStyle(fontFamily: fFam, color: txtCol, fontWeight: FontWeight.bold),
+            child: Dismissible(
+              key: ValueKey(plan['id']),
+              direction: DismissDirection.endToStart,
+              confirmDismiss: (_) async {
+                await _deletePlan(plan);
+                return false; // 我們自己控制狀態，不讓 Dismissible 自動移除
+              },
+              background: Container(
+                alignment: Alignment.centerRight,
+                padding: const EdgeInsets.only(right: 20),
+                decoration: BoxDecoration(
+                  color: Colors.red.shade400,
+                  borderRadius: BorderRadius.circular(32),
                 ),
-                trailing: Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(color: pCol.withOpacity(0.1), shape: BoxShape.circle),
-                  child: Icon(Icons.play_arrow, color: pCol),
+                child: const Icon(Icons.delete_outline, color: Colors.white, size: 28),
+              ),
+              child: ZenCard(
+                padding: 12,
+                child: ListTile(
+                  title: Text(
+                    plan['plan_name'] ?? '未命名課表',
+                    style: TextStyle(fontFamily: fFam, color: txtCol, fontWeight: FontWeight.bold, fontSize: 16),
+                  ),
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      IconButton(
+                        icon: Icon(Icons.delete_outline, color: Colors.red.shade300, size: 22),
+                        onPressed: () => _deletePlan(plan),
+                        tooltip: '刪除課表',
+                      ),
+                      Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(color: pCol.withOpacity(0.1), shape: BoxShape.circle),
+                        child: Icon(Icons.play_arrow, color: pCol),
+                      ),
+                    ],
+                  ),
+                  onTap: () => _startWorkout(plan),
                 ),
-                onTap: () => _startWorkout(plan),
               ),
             ),
           ),
@@ -1325,9 +1548,33 @@ class _WorkoutManagerState extends State<WorkoutManager> {
                 session['plan_name'] ?? '未命名計畫',
                 style: TextStyle(fontFamily: fFam, color: txtCol, fontWeight: FontWeight.bold),
               ),
-              subtitle: Text(
-                session['date'] ?? '',
-                style: TextStyle(fontFamily: fFam, color: dimCol, fontSize: 12),
+              subtitle: Row(
+                children: [
+                  Text(
+                    session['date'] ?? '',
+                    style: TextStyle(fontFamily: fFam, color: dimCol, fontSize: 12),
+                  ),
+                  if (session['total_rate'] != null) ...[
+                    const SizedBox(width: 8),
+                    Builder(builder: (ctx) {
+                      final rate = (session['total_rate'] as num).toDouble();
+                      final color = rate >= 80 ? Colors.green.shade600
+                          : rate >= 50 ? Colors.orange.shade600
+                          : Colors.red.shade400;
+                      return Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: color.withOpacity(0.12),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Text(
+                          '完成 ${rate.toStringAsFixed(0)}%',
+                          style: TextStyle(fontSize: 11, color: color, fontWeight: FontWeight.bold),
+                        ),
+                      );
+                    }),
+                  ],
+                ],
               ),
               iconColor: pCol,
               collapsedIconColor: dimCol,
@@ -1986,6 +2233,11 @@ class _WorkoutManagerState extends State<WorkoutManager> {
 
                 // 一次上傳
                 await supabase.from('workout_logs').insert(allLogsToUpload);
+                
+                // 播放上傳成功音效
+                final summaryPlayer = AudioPlayer();
+                await summaryPlayer.play(AssetSource('audio/upload_data.wav'));
+                
                 print("✅ 結算與動作紀錄存檔成功！");
 
                 // 將該筆課表標示為完成，避免重複執行並保留供教練複製
@@ -2010,7 +2262,7 @@ class _WorkoutManagerState extends State<WorkoutManager> {
               await _fetchPlans();
             },
             child: Text(
-              "上傳數據並回村莊",
+              isRpgMode.value ? "上傳數據並回村莊" : "上傳數據",
               style: TextStyle(fontFamily: fFam, 
                 color: bgCol,
                 fontSize: 16,
@@ -2370,6 +2622,7 @@ class _RestTimerDialogState extends State<RestTimerDialog> {
   late Timer timer;
   int remainingSeconds = 0;
   bool isFinished = false;
+  AudioPlayer? _audioPlayer;
 
   @override
   void initState() {
@@ -2391,6 +2644,7 @@ class _RestTimerDialogState extends State<RestTimerDialog> {
         });
         t.cancel();
         _triggerVibration();
+        _playRingtone();
       } else {
         setState(() {
           remainingSeconds = endTime.difference(now).inSeconds;
@@ -2421,9 +2675,17 @@ class _RestTimerDialogState extends State<RestTimerDialog> {
     }
   }
 
+  Future<void> _playRingtone() async {
+    _audioPlayer = AudioPlayer();
+    String audioFile = isRpgMode.value ? 'audio/rpg_rest.wav' : 'audio/longevity_rest.wav';
+    await _audioPlayer?.play(AssetSource(audioFile));
+  }
+
   @override
   void dispose() {
     timer.cancel();
+    _audioPlayer?.stop();
+    _audioPlayer?.dispose();
     super.dispose();
   }
 
@@ -2458,6 +2720,7 @@ class _RestTimerDialogState extends State<RestTimerDialog> {
       actions: [
         ElevatedButton(
           onPressed: () {
+            _audioPlayer?.stop();
             Navigator.of(context).pop();
           },
           style: ElevatedButton.styleFrom(

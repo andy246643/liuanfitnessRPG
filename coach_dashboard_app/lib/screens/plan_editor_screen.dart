@@ -75,35 +75,40 @@ class _PlanEditorScreenState extends State<PlanEditorScreen> {
     
     setState(() => _isSaving = true);
     try {
-      // 1. 新增一筆記錄到 workout_plans，並取回新的 UUID (藉由 select())
-      final savedPlanData = await _supabase
-          .from('workout_plans')
-          .insert({
-            'plan_name': _planNameController.text,
-            'user_id': widget.targetUserId,
-          })
-          .select()
-          .single();
+      String? newPlanId;
+      try {
+        final savedPlanData = await _supabase
+            .from('workout_plans')
+            .insert({
+              'plan_name': _planNameController.text,
+              'user_id': widget.targetUserId,
+            })
+            .select()
+            .single();
 
-      final newPlanId = savedPlanData['id'] as String;
+        newPlanId = savedPlanData['id'] as String;
 
-      // 2. 將修改後的動作細項存入 plan_details (自動重設 ID 並指向新的 planId)
-      if (_details.isNotEmpty) {
-        final newDetailsData = _details.asMap().entries.map((entry) {
-            final detail = entry.value;
-            // cloneForNewPlan 負責清除舊的 id，並指派新的 planId
-            return detail.cloneForNewPlan(newPlanId, newOrderIndex: entry.key).toJson();
-        }).toList();
+        if (_details.isNotEmpty) {
+          final newDetailsData = _details.asMap().entries.map((entry) {
+              final detail = entry.value;
+              return detail.cloneForNewPlan(newPlanId!, newOrderIndex: entry.key).toJson();
+          }).toList();
 
-        await _supabase.from('plan_details').insert(newDetailsData);
+          await _supabase.from('plan_details').insert(newDetailsData);
+        }
+
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('已成功建立新課表！', style: TextStyle(color: Colors.white)), backgroundColor: Colors.green),
+        );
+        Navigator.popUntil(context, (route) => route.isFirst);
+        
+      } catch (e) {
+        if (newPlanId != null) {
+          await _supabase.from('workout_plans').delete().eq('id', newPlanId);
+        }
+        rethrow;
       }
-
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('已成功建立新課表！', style: TextStyle(color: Colors.white)), backgroundColor: Colors.green),
-      );
-      Navigator.popUntil(context, (route) => route.isFirst); // 返回首頁
-      
     } catch (e) {
       debugPrint('Error saving new plan: $e');
       if (!mounted) return;
@@ -138,7 +143,6 @@ class _PlanEditorScreenState extends State<PlanEditorScreen> {
       ),
       body: Column(
          children: [
-            // 頂部資訊區 (包含新課表名稱、總訓練量、目標學員ID提示)
             Container(
                padding: const EdgeInsets.all(16),
                color: Theme.of(context).colorScheme.surfaceContainerHighest,
@@ -160,7 +164,7 @@ class _PlanEditorScreenState extends State<PlanEditorScreen> {
                            Text('目標學員 ID: ${widget.targetUserId.substring(0, 8)}...', style: const TextStyle(color: Colors.grey)),
                            Chip(
                               avatar: const Icon(Icons.monitor_weight, size: 16),
-                              label: Text('總目標訓練量: $_totalVolume', style: const TextStyle(fontWeight: FontWeight.bold)),
+                              label: Text('總訓練量: $_totalVolume', style: const TextStyle(fontWeight: FontWeight.bold)),
                               backgroundColor: Theme.of(context).colorScheme.tertiaryContainer,
                            ),
                         ],
@@ -169,15 +173,12 @@ class _PlanEditorScreenState extends State<PlanEditorScreen> {
                ),
             ),
             
-            // 下方動作清單
             Expanded(
                child: ReorderableListView.builder(
                  itemCount: _details.length,
                  onReorder: (oldIndex, newIndex) {
                     setState(() {
-                       if (oldIndex < newIndex) {
-                         newIndex -= 1;
-                       }
+                       if (oldIndex < newIndex) newIndex -= 1;
                        final item = _details.removeAt(oldIndex);
                        _details.insert(newIndex, item);
                     });
@@ -214,7 +215,8 @@ class _PlanEditorScreenState extends State<PlanEditorScreen> {
   }
 }
 
-class _DetailEditCard extends StatelessWidget {
+// ─── 動作編輯卡片（StatefulWidget for batch add state） ───────────────────────
+class _DetailEditCard extends StatefulWidget {
   final PlanDetail detail;
   final ValueChanged<PlanDetail> onChanged;
   final VoidCallback onDelete;
@@ -227,175 +229,338 @@ class _DetailEditCard extends StatelessWidget {
   });
 
   @override
+  State<_DetailEditCard> createState() => _DetailEditCardState();
+}
+
+class _DetailEditCardState extends State<_DetailEditCard> {
+
+  void _addSet() {
+    final newSets = List<Map<String, dynamic>>.from(widget.detail.prescribedSets);
+    double w = 0;
+    int r = 0;
+    int rest = widget.detail.restTimeSeconds;
+    if (newSets.isNotEmpty) {
+      w = (newSets.last['weight'] as num?)?.toDouble() ?? 0;
+      r = (newSets.last['reps'] as num?)?.toInt() ?? 0;
+      rest = (newSets.last['rest_time'] as num?)?.toInt() ?? 60;
+    }
+    // 加入 unique id 以便 reorder 或 delete 時維持 Focus 狀態
+    newSets.add({'_id': DateTime.now().microsecondsSinceEpoch.toString(), 'weight': w, 'reps': r, 'rest_time': rest});
+    widget.onChanged(widget.detail.copyWith(prescribedSets: newSets));
+  }
+
+  void _removeSet(int index) {
+    final newSets = List<Map<String, dynamic>>.from(widget.detail.prescribedSets)..removeAt(index);
+    widget.onChanged(widget.detail.copyWith(prescribedSets: newSets));
+  }
+
+  void _reorderSets(int oldIndex, int newIndex) {
+    final newSets = List<Map<String, dynamic>>.from(widget.detail.prescribedSets);
+    if (oldIndex < newIndex) newIndex -= 1;
+    final item = newSets.removeAt(oldIndex);
+    newSets.insert(newIndex, item);
+    widget.onChanged(widget.detail.copyWith(prescribedSets: newSets));
+  }
+
+  void _addAltSet() {
+    List<Map<String, dynamic>> newSets;
+    if (widget.detail.altPrescribedSets.isEmpty && widget.detail.prescribedSets.isNotEmpty) {
+      newSets = List<Map<String, dynamic>>.from(widget.detail.prescribedSets);
+      for (var i = 0; i < newSets.length; i++) {
+         final map = Map<String, dynamic>.from(newSets[i]);
+         map['_id'] = DateTime.now().microsecondsSinceEpoch.toString() + '_alt_$i';
+         newSets[i] = map;
+      }
+    } else {
+      newSets = List<Map<String, dynamic>>.from(widget.detail.altPrescribedSets);
+      double w = 0;
+      int r = 0;
+      int rest = widget.detail.restTimeSeconds;
+      if (newSets.isNotEmpty) {
+        w = (newSets.last['weight'] as num?)?.toDouble() ?? 0;
+        r = (newSets.last['reps'] as num?)?.toInt() ?? 0;
+        rest = (newSets.last['rest_time'] as num?)?.toInt() ?? 60;
+      }
+      newSets.add({'_id': DateTime.now().microsecondsSinceEpoch.toString() + '_alt', 'weight': w, 'reps': r, 'rest_time': rest});
+    }
+    widget.onChanged(widget.detail.copyWith(altPrescribedSets: newSets));
+  }
+
+  void _removeAltSet(int index) {
+    final newSets = List<Map<String, dynamic>>.from(widget.detail.altPrescribedSets)..removeAt(index);
+    widget.onChanged(widget.detail.copyWith(altPrescribedSets: newSets));
+  }
+
+  void _reorderAltSets(int oldIndex, int newIndex) {
+    final newSets = List<Map<String, dynamic>>.from(widget.detail.altPrescribedSets);
+    if (oldIndex < newIndex) newIndex -= 1;
+    final item = newSets.removeAt(oldIndex);
+    newSets.insert(newIndex, item);
+    widget.onChanged(widget.detail.copyWith(altPrescribedSets: newSets));
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final detail = widget.detail;
+    final sets   = detail.prescribedSets;
+
     return Card(
-       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-       elevation: 2,
-       child: Padding(
-         padding: const EdgeInsets.all(12),
-         child: Column(
-           children: [
-              Row(
-                 children: [
-                    const Icon(Icons.drag_handle, color: Colors.grey),
-                    const SizedBox(width: 8),
-                    Expanded(
-                       child: TextFormField(
-                         initialValue: detail.exercise,
-                         decoration: const InputDecoration(labelText: '動作名稱', isDense: true),
-                         onChanged: (val) => onChanged(detail.copyWith(exercise: val)),
-                       ),
-                    ),
-                    IconButton(
-                       icon: const Icon(Icons.delete_outline, color: Colors.red),
-                       onPressed: onDelete,
-                    )
-                 ],
-              ),
-              const SizedBox(height: 12),
-              Row(
-                 children: [
-                    Expanded(
-                       child: TextFormField(
-                         initialValue: detail.targetSets.toString(),
-                         decoration: const InputDecoration(labelText: '組數 (Sets)', isDense: true),
-                         keyboardType: TextInputType.number,
-                         onChanged: (val) => onChanged(detail.copyWith(targetSets: int.tryParse(val) ?? 0)),
-                       ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                       child: TextFormField(
-                         initialValue: detail.targetReps.toString(),
-                         decoration: const InputDecoration(labelText: '次數 (Reps)', isDense: true),
-                         keyboardType: TextInputType.number,
-                         onChanged: (val) => onChanged(detail.copyWith(targetReps: int.tryParse(val) ?? 0)),
-                       ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                       child: TextFormField(
-                         initialValue: detail.targetWeight.toString(),
-                         decoration: const InputDecoration(labelText: '重量 (Weight)', isDense: true),
-                         keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                         onChanged: (val) => onChanged(detail.copyWith(targetWeight: double.tryParse(val) ?? 0)),
-                       ),
-                    ),
-                 ],
-              ),
-              const SizedBox(height: 12),
-              Wrap(
-                 spacing: 8.0,
-                 runSpacing: 8.0,
-                 alignment: WrapAlignment.spaceBetween,
-                 crossAxisAlignment: WrapCrossAlignment.center,
-                 children: [
-                    Row(
-                       mainAxisSize: MainAxisSize.min,
-                       children: [
-                          const Icon(Icons.battery_charging_full, size: 16, color: Colors.orange),
-                          const SizedBox(width: 4),
-                          const Text('自覺強度 RPE: ', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.orange)),
-                          SizedBox(
-                             width: 40,
-                             child: TextFormField(
-                               initialValue: detail.targetRpe.toString(),
-                               decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.only(bottom: 4)),
-                               keyboardType: TextInputType.number,
-                               style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
-                               onChanged: (val) => onChanged(detail.copyWith(targetRpe: int.tryParse(val) ?? 0)),
-                             ),
-                          )
-                       ],
-                    ),
-                    Row(
-                       mainAxisSize: MainAxisSize.min,
-                       children: [
-                           const Icon(Icons.timer, size: 16, color: Colors.green),
-                           const SizedBox(width: 4),
-                           const Text('休息(秒): ', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.green)),
-                           SizedBox(
-                              width: 40,
-                              child: TextFormField(
-                                initialValue: detail.restTimeSeconds.toString(),
-                                decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.only(bottom: 4)),
-                                keyboardType: TextInputType.number,
-                                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
-                                onChanged: (val) => onChanged(detail.copyWith(restTimeSeconds: int.tryParse(val) ?? 60)),
-                              ),
-                           )
-                        ],
-                     ),
-                    Container(
-                       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                       decoration: BoxDecoration(
-                         color: Colors.blue.withOpacity(0.1),
-                         borderRadius: BorderRadius.circular(8),
-                       ),
-                       child: Text(
-                          'Volume: ${detail.targetVolume}',
-                          style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.blue),
-                       ),
-                    )
-                 ],
-              ),
-              const Divider(height: 24),
-              ExpansionTile(
-                title: const Text('設為替換動作 (Alternative)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.grey)),
-                tilePadding: EdgeInsets.zero,
-                childrenPadding: const EdgeInsets.only(bottom: 8),
-                shape: const Border(),
-                initiallyExpanded: detail.altExercise != null && detail.altExercise!.isNotEmpty,
-                children: [
-                  Row(
-                    children: [
-                      const Icon(Icons.swap_horiz, color: Colors.indigo),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: TextFormField(
-                          initialValue: detail.altExercise,
-                          decoration: const InputDecoration(labelText: '替換動作名稱 (留空代表無)', isDense: true),
-                          onChanged: (val) => onChanged(detail.copyWith(altExercise: val)),
-                        ),
-                      ),
-                    ],
+      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      elevation: 2,
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // ── 動作名稱 ──────────────────────────────────────────
+            Row(
+              children: [
+                const Icon(Icons.drag_handle, color: Colors.grey),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: TextFormField(
+                    initialValue: detail.exercise,
+                    decoration: const InputDecoration(labelText: '動作名稱', isDense: true),
+                    onChanged: (val) => widget.onChanged(detail.copyWith(exercise: val)),
                   ),
-                  const SizedBox(height: 12),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: TextFormField(
-                          initialValue: detail.altTargetSets.toString(),
-                          decoration: const InputDecoration(labelText: '替換組數', isDense: true),
-                          keyboardType: TextInputType.number,
-                          onChanged: (val) => onChanged(detail.copyWith(altTargetSets: int.tryParse(val) ?? 0)),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.delete_outline, color: Colors.red),
+                  onPressed: widget.onDelete,
+                )
+              ],
+            ),
+            const SizedBox(height: 12),
+            
+            // ── 組別設定清單 ──────────────────────────────────────────
+            Row(
+              children: [
+                const Icon(Icons.format_list_numbered, size: 16, color: Colors.indigo),
+                const SizedBox(width: 6),
+                const Text('組別設定', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.indigo)),
+                const Spacer(),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  decoration: BoxDecoration(color: Colors.blue.withOpacity(0.1), borderRadius: BorderRadius.circular(8)),
+                  child: Text('Vol: ${detail.targetVolume}',
+                      style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.blue, fontSize: 13)),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            
+            // 已設定組別清單
+             ReorderableListView(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                onReorder: _reorderSets,
+                children: sets.asMap().entries.map((e) {
+                  final idx = e.key;
+                  final ps  = e.value;
+                  final w   = ps['weight'] ?? 0;
+                  final r   = ps['reps'] ?? 0;
+                  final rest = ps['rest_time'] ?? detail.restTimeSeconds;
+                  final uniqueId = ps['_id'] ?? 'ps_${idx}';
+                  
+                  return Padding(
+                    key: ValueKey(uniqueId),
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.drag_handle, color: Colors.grey, size: 20),
+                        const SizedBox(width: 4),
+                        Container(
+                          width: 24, height: 24,
+                          alignment: Alignment.center,
+                          decoration: BoxDecoration(
+                            color: Colors.indigo.shade50,
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: Text('${idx + 1}',
+                              style: TextStyle(color: Colors.indigo.shade700, fontWeight: FontWeight.bold, fontSize: 12)),
                         ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: TextFormField(
-                          initialValue: detail.altTargetReps.toString(),
-                          decoration: const InputDecoration(labelText: '替換次數', isDense: true),
-                          keyboardType: TextInputType.number,
-                          onChanged: (val) => onChanged(detail.copyWith(altTargetReps: int.tryParse(val) ?? 0)),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: TextFormField(
-                          initialValue: detail.altTargetWeight.toString(),
-                          decoration: const InputDecoration(labelText: '替換重量', isDense: true),
+                        const SizedBox(width: 8),
+                        Expanded(child: TextFormField(
+                          initialValue: w == 0 ? '' : w.toString(),
+                          decoration: const InputDecoration(labelText: '重量kg', isDense: true),
                           keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                          onChanged: (val) => onChanged(detail.copyWith(altTargetWeight: double.tryParse(val) ?? 0)),
+                          onChanged: (val) {
+                             final newSets = List<Map<String, dynamic>>.from(widget.detail.prescribedSets);
+                             newSets[idx]['weight'] = double.tryParse(val) ?? 0;
+                             widget.onChanged(widget.detail.copyWith(prescribedSets: newSets));
+                          },
+                        )),
+                        const SizedBox(width: 6),
+                        Expanded(child: TextFormField(
+                          initialValue: r == 0 ? '' : r.toString(),
+                          decoration: const InputDecoration(labelText: '次數', isDense: true),
+                          keyboardType: TextInputType.number,
+                          onChanged: (val) {
+                             final newSets = List<Map<String, dynamic>>.from(widget.detail.prescribedSets);
+                             newSets[idx]['reps'] = int.tryParse(val) ?? 0;
+                             widget.onChanged(widget.detail.copyWith(prescribedSets: newSets));
+                          },
+                        )),
+                        const SizedBox(width: 6),
+                        Expanded(child: TextFormField(
+                          initialValue: rest.toString(),
+                          decoration: const InputDecoration(labelText: '休息(秒)', isDense: true),
+                          keyboardType: TextInputType.number,
+                          onChanged: (val) {
+                             final newSets = List<Map<String, dynamic>>.from(widget.detail.prescribedSets);
+                             newSets[idx]['rest_time'] = int.tryParse(val) ?? 60;
+                             widget.onChanged(widget.detail.copyWith(prescribedSets: newSets));
+                          },
+                        )),
+                        IconButton(
+                          icon: const Icon(Icons.close, size: 18, color: Colors.red),
+                          onPressed: () => _removeSet(idx),
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(),
                         ),
+                      ],
+                    ),
+                  );
+                }).toList(),
+              ),
+              
+            const SizedBox(height: 4),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: _addSet,
+                icon: const Icon(Icons.add, size: 16),
+                label: const Text('加入一組'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: Colors.indigo,
+                  side: BorderSide(color: Colors.indigo.shade200),
+                ),
+              ),
+            ),
+            
+            const Divider(height: 24),
+            // ── 替換動作（收合） ───────────────────────────────────
+            ExpansionTile(
+              title: const Text('設為替換動作 (Alternative)',
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.grey)),
+              tilePadding: EdgeInsets.zero,
+              childrenPadding: const EdgeInsets.only(bottom: 8),
+              shape: const Border(),
+              initiallyExpanded: detail.altExercise != null && detail.altExercise!.isNotEmpty,
+              children: [
+                Row(
+                  children: [
+                    const Icon(Icons.swap_horiz, color: Colors.indigo),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: TextFormField(
+                        initialValue: detail.altExercise,
+                        decoration: const InputDecoration(labelText: '替換動作名稱（留空代表無）', isDense: true),
+                        onChanged: (val) => widget.onChanged(detail.copyWith(altExercise: val)),
                       ),
-                    ],
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                
+                // 替換動作的組別設定
+                Row(
+                  children: [
+                    const Icon(Icons.format_list_numbered, size: 14, color: Colors.indigo),
+                    const SizedBox(width: 6),
+                    const Text('替換動作組別', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.indigo)),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                
+                 ReorderableListView(
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    onReorder: _reorderAltSets,
+                    children: detail.altPrescribedSets.asMap().entries.map((e) {
+                      final idx = e.key;
+                      final ps  = e.value;
+                      final w   = ps['weight'] ?? 0;
+                      final r   = ps['reps'] ?? 0;
+                      final rest = ps['rest_time'] ?? detail.restTimeSeconds;
+                      final uniqueId = ps['_id'] ?? 'altps_${idx}';
+                      
+                      return Padding(
+                        key: ValueKey(uniqueId),
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.drag_handle, color: Colors.grey, size: 20),
+                            const SizedBox(width: 4),
+                            Container(
+                              width: 24, height: 24,
+                              alignment: Alignment.center,
+                              decoration: BoxDecoration(color: Colors.indigo.shade50, borderRadius: BorderRadius.circular(4)),
+                              child: Text('${idx + 1}', style: TextStyle(color: Colors.indigo.shade700, fontWeight: FontWeight.bold, fontSize: 12)),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(child: TextFormField(
+                              initialValue: w == 0 ? '' : w.toString(),
+                              decoration: const InputDecoration(labelText: '重量kg', isDense: true),
+                              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                              onChanged: (val) {
+                                 final newSets = List<Map<String, dynamic>>.from(widget.detail.altPrescribedSets);
+                                 newSets[idx]['weight'] = double.tryParse(val) ?? 0;
+                                 widget.onChanged(widget.detail.copyWith(altPrescribedSets: newSets));
+                              },
+                            )),
+                            const SizedBox(width: 6),
+                            Expanded(child: TextFormField(
+                              initialValue: r == 0 ? '' : r.toString(),
+                              decoration: const InputDecoration(labelText: '次數', isDense: true),
+                              keyboardType: TextInputType.number,
+                              onChanged: (val) {
+                                 final newSets = List<Map<String, dynamic>>.from(widget.detail.altPrescribedSets);
+                                 newSets[idx]['reps'] = int.tryParse(val) ?? 0;
+                                 widget.onChanged(widget.detail.copyWith(altPrescribedSets: newSets));
+                              },
+                            )),
+                            const SizedBox(width: 6),
+                            Expanded(child: TextFormField(
+                              initialValue: rest.toString(),
+                              decoration: const InputDecoration(labelText: '休息(秒)', isDense: true),
+                              keyboardType: TextInputType.number,
+                              onChanged: (val) {
+                                 final newSets = List<Map<String, dynamic>>.from(widget.detail.altPrescribedSets);
+                                 newSets[idx]['rest_time'] = int.tryParse(val) ?? 60;
+                                 widget.onChanged(widget.detail.copyWith(altPrescribedSets: newSets));
+                              },
+                            )),
+                            IconButton(
+                              icon: const Icon(Icons.close, size: 18, color: Colors.red),
+                              onPressed: () => _removeAltSet(idx),
+                              padding: EdgeInsets.zero,
+                              constraints: const BoxConstraints(),
+                            ),
+                          ],
+                        ),
+                      );
+                    }).toList(),
                   ),
-                ],
-              )
-           ],
-         ),
-       ),
+                  
+                const SizedBox(height: 4),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: _addAltSet,
+                    icon: const Icon(Icons.add, size: 16),
+                    label: const Text('自動複製主動作組別 / 加入替換組'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.indigo,
+                      side: BorderSide(color: Colors.indigo.shade200),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

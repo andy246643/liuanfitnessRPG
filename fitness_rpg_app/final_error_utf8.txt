@@ -1,0 +1,60 @@
+﻿Resolving dependencies...
+Downloading packages...
+  app_links 6.4.1 (7.0.0 available)
+  dart_jsonwebtoken 3.3.1 (3.3.2 available)
+  ffi 2.1.5 (2.2.0 available)
+  matcher 0.12.18 (0.12.19 available)
+  meta 1.17.0 (1.18.1 available)
+  shared_preferences_android 2.4.20 (2.4.21 available)
+  test_api 0.7.9 (0.7.10 available)
+  url_launcher_ios 6.3.6 (6.4.1 available)
+  vibration 3.1.7 (3.1.8 available)
+  win32 5.15.0 (6.0.0 available)
+  win32_registry 2.1.0 (3.0.2 available)
+Got dependencies!
+11 packages have newer versions incompatible with dependency constraints.
+Try `flutter pub outdated` for more information.
+Launching lib\main.dart on Chrome in debug mode...
+Waiting for connection from debug service on Chrome...          
+flutter : lib/main.dart:15:4: Error: Setter not found: 'supa
+baseUrl'.
+位於 線路:1 字元:1
++ flutter run -d chrome > final_error.txt 2>&1
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (lib/main.dart: 
+   1... 'supabaseUrl'.:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+   supabaseUrl = String.fromEnvironment('SUPABASE_URL');
+   ^^^^^^^^^^^
+lib/main.dart:16:4: Error: Setter not found: 'supabaseAnonKe
+y'.
+   supabaseAnonKey = String.fromEnvironment('SUPABASE_ANON_K
+EY');
+   ^^^^^^^^^^^^^^^
+lib/main.dart:18:7: Error: Undefined name 'supabaseUrl'.
+  if (supabaseUrl.isEmpty || supabaseAnonKey.isEmpty) {
+      ^^^^^^^^^^^
+lib/main.dart:18:30: Error: Undefined name 'supabaseAnonKey'
+.
+  if (supabaseUrl.isEmpty || supabaseAnonKey.isEmpty) {
+                             ^^^^^^^^^^^^^^^
+lib/main.dart:23:7: Error: Undefined name 'supabaseUrl'.
+  if (supabaseUrl.isNotEmpty && supabaseAnonKey.isNotEmpty) 
+{
+      ^^^^^^^^^^^
+lib/main.dart:23:33: Error: Undefined name 'supabaseAnonKey'
+.
+  if (supabaseUrl.isNotEmpty && supabaseAnonKey.isNotEmpty) 
+{
+                                ^^^^^^^^^^^^^^^
+lib/main.dart:24:36: Error: Undefined name 'supabaseUrl'.
+    await Supabase.initialize(url: supabaseUrl, anonKey: sup
+abaseAnonKey);
+                                   ^^^^^^^^^^^
+lib/main.dart:24:58: Error: Undefined name 'supabaseAnonKey'
+.
+    await Supabase.initialize(url: supabaseUrl, anonKey: sup
+abaseAnonKey);
+                                                         ^^^
+^^^^^^^^^^^^

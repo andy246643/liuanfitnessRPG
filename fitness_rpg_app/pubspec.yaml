@@ -38,6 +38,7 @@ dependencies:
   fl_chart: ^1.1.1
   vibration: ^3.1.7
   uuid: ^4.5.3
+  audioplayers: ^6.6.0
 
 
 dev_dependencies:
@@ -66,6 +67,7 @@ flutter:
   assets:
   - assets/images/  
   - assets/images/skins/liuan/
+  - assets/audio/
   #   - images/a_dot_burr.jpeg
   #   - images/a_dot_burr.jpeg
   #   - images/a_dot_ham.jpeg

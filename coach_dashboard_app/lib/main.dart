@@ -617,7 +617,7 @@ class _TraineeSessionsScreenState extends State<TraineeSessionsScreen> with Sing
       final supabase = Supabase.instance.client;
       final response = await supabase
           .from('workout_logs')
-          .select('id, plan_name, created_at')
+          .select('id, plan_name, created_at, total_rate, exercise_name')
           .eq('user_id', widget.traineeId)
           .order('created_at', ascending: false);
           
@@ -633,9 +633,15 @@ class _TraineeSessionsScreenState extends State<TraineeSessionsScreen> with Sing
           sessions[key] = {
             'date': dateStr,
             'plan_name': planName,
-            'exercise_count': 1,
+            'exercise_count': 0,
             'latest_time': log['created_at'],
+            'total_rate': null,
           };
+        }
+
+        // 如果是副本總結結算，載入 total_rate
+        if ((log['exercise_name'] as String?)?.contains('副本總結') == true) {
+          sessions[key]!['total_rate'] = log['total_rate'];
         } else {
           sessions[key]!['exercise_count'] = (sessions[key]!['exercise_count'] as int) + 1;
         }
@@ -656,7 +662,7 @@ class _TraineeSessionsScreenState extends State<TraineeSessionsScreen> with Sing
       final supabase = Supabase.instance.client;
       final response = await supabase
           .from('workout_plans')
-          .select('id, plan_name, created_at')
+          .select('id, plan_name, created_at, plan_details(id, exercise, target_sets, target_reps, target_weight, order_index, prescribed_sets)')
           .eq('user_id', widget.traineeId)
           .order('created_at', ascending: false);
           
@@ -1038,6 +1044,9 @@ class _TraineeSessionsScreenState extends State<TraineeSessionsScreen> with Sing
           itemBuilder: (context, index) {
             final plan = plans[index];
             final dateStr = (plan['created_at'] as String?)?.substring(0, 10) ?? '未知日期';
+            final details = List<Map<String, dynamic>>.from(plan['plan_details'] as List? ?? []);
+            details.sort((a, b) => ((a['sort_order'] as int?) ?? 0).compareTo((b['sort_order'] as int?) ?? 0));
+
             return Card(
               elevation: 0,
               color: Colors.white,
@@ -1046,8 +1055,10 @@ class _TraineeSessionsScreenState extends State<TraineeSessionsScreen> with Sing
                 side: BorderSide(color: Colors.grey.shade200),
               ),
               margin: const EdgeInsets.only(bottom: 12),
-              child: ListTile(
-                contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+              clipBehavior: Clip.antiAlias,
+              child: ExpansionTile(
+                tilePadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+                childrenPadding: EdgeInsets.zero,
                 leading: Container(
                   padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
@@ -1057,16 +1068,86 @@ class _TraineeSessionsScreenState extends State<TraineeSessionsScreen> with Sing
                   child: Icon(Icons.assignment, color: Colors.blue.shade700),
                 ),
                 title: Text(plan['plan_name'] ?? '未命名', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                subtitle: Text('安排/建立日期: $dateStr', style: TextStyle(color: Colors.grey.shade500, fontSize: 13)),
-                trailing: TextButton(
-                  onPressed: () {
-                     // 未來可以跳轉至課表編輯或預覽頁面
-                     ScaffoldMessenger.of(context).showSnackBar(
-                       SnackBar(content: Text('點擊了課表: ${plan['plan_name']}')),
-                     );
-                  },
-                  child: const Text('查看', style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF1E5EFF))),
-                ),
+                subtitle: Text('建立日期: $dateStr  •  ${details.length} 個動作',
+                    style: TextStyle(color: Colors.grey.shade500, fontSize: 13)),
+                iconColor: Colors.blue.shade700,
+                collapsedIconColor: Colors.grey.shade400,
+                children: details.isEmpty
+                    ? [
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                          child: Text('此課表尚無動作', style: TextStyle(color: Colors.grey.shade400)),
+                        )
+                      ]
+                    : details.map((ex) {
+                        final name = ex['exercise'] ?? '未知動作';
+                        final sets = ex['target_sets'] ?? '-';
+                        final reps = ex['target_reps'] ?? '-';
+                        final weight = ex['target_weight'];
+                        final weightStr = weight != null && (weight as num) > 0 ? '  ${weight}kg' : '';
+                        return Container(
+                          decoration: BoxDecoration(
+                            border: Border(top: BorderSide(color: Colors.grey.shade100)),
+                          ),
+                          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                          child: Row(
+                            children: [
+                              Container(
+                                width: 32, height: 32,
+                                alignment: Alignment.center,
+                                decoration: BoxDecoration(
+                                  color: Colors.blue.shade50,
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: Text('${(ex['order_index'] as int? ?? 0) + 1}',
+                                    style: TextStyle(color: Colors.blue.shade700, fontWeight: FontWeight.bold, fontSize: 13)),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(name, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      '$sets 組 × $reps 次$weightStr',
+                                      style: TextStyle(color: Colors.grey.shade600, fontSize: 13),
+                                    ),
+                                    // 完整組別設定 (prescribed_sets)
+                                    if ((ex['prescribed_sets'] as List?)?.isNotEmpty == true) ...[
+                                      const SizedBox(height: 6),
+                                      Wrap(
+                                        spacing: 6,
+                                        runSpacing: 4,
+                                        children: [
+                                          const Icon(Icons.format_list_numbered, color: Colors.indigo, size: 14),
+                                          ...(ex['prescribed_sets'] as List).asMap().entries.map((e) {
+                                            final ps = e.value as Map;
+                                            final w = ps['weight'] ?? 0;
+                                            final r = ps['reps'] ?? 0;
+                                            return Container(
+                                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                              decoration: BoxDecoration(
+                                                color: Colors.indigo.shade50,
+                                                borderRadius: BorderRadius.circular(6),
+                                                border: Border.all(color: Colors.indigo.shade200),
+                                              ),
+                                              child: Text(
+                                                '組 ${e.key + 1}: ${w}kg × $r',
+                                                style: TextStyle(fontSize: 11, color: Colors.indigo.shade800),
+                                              ),
+                                            );
+                                          }),
+                                        ],
+                                      ),
+                                    ],
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                      }).toList(),
               ),
             );
           },
@@ -1118,7 +1199,32 @@ class _TraineeSessionsScreenState extends State<TraineeSessionsScreen> with Sing
                 title: Text(session['plan_name'], style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
                 subtitle: Padding(
                   padding: const EdgeInsets.only(top: 4.0),
-                  child: Text('${session['date']} • 完成 ${session['exercise_count']} 個動作', style: TextStyle(color: Colors.grey.shade600, fontSize: 13)),
+                  child: Row(
+                    children: [
+                      Text('${session['date']} • ${session['exercise_count']} 個動作',
+                          style: TextStyle(color: Colors.grey.shade600, fontSize: 13)),
+                      if (session['total_rate'] != null) ...[
+                        const SizedBox(width: 8),
+                        Builder(builder: (ctx) {
+                          final rate = (session['total_rate'] as num).toDouble();
+                          final color = rate >= 80 ? Colors.green.shade700
+                              : rate >= 50 ? Colors.orange.shade700
+                              : Colors.red.shade400;
+                          return Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: color.withOpacity(0.1),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Text(
+                              '${rate.toStringAsFixed(0)}%',
+                              style: TextStyle(fontSize: 12, color: color, fontWeight: FontWeight.bold),
+                            ),
+                          );
+                        }),
+                      ],
+                    ],
+                  ),
                 ),
                 trailing: const Icon(Icons.arrow_forward_ios, color: Colors.grey, size: 14),
                 onTap: () {
