@@ -311,7 +311,7 @@ class _WorkoutManagerState extends State<WorkoutManager> {
     if (confirmed != true) return;
 
     try {
-      await supabase.from('workout_plans').delete().eq('id', plan['id']);
+      await supabase.from('workout_plans').update({'is_hidden': true}).eq('id', plan['id']);
       setState(() {
         allPlans.removeWhere((p) => p['id'] == plan['id']);
       });
@@ -347,6 +347,7 @@ class _WorkoutManagerState extends State<WorkoutManager> {
         .select('id, plan_name')
         .eq('user_id', currentUserId)
         .eq('is_completed', false)
+        .neq('is_hidden', true) // 過濾掉已被學生隱藏的課表
         .order('created_at', ascending: false);
 
     // 2. 抓取歷史課表 (已完成的紀錄)
