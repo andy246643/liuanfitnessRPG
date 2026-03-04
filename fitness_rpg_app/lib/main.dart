@@ -737,34 +737,32 @@ class _WorkoutManagerState extends State<WorkoutManager> {
       ),
       bottomNavigationBar: (!isRpgMode.value && currentUserId.isNotEmpty && !isTraining)
           ? Container(
+              padding: const EdgeInsets.only(bottom: 24), // 加入此行，將按鈕往上推，避開 Home 橫條
               decoration: BoxDecoration(
                 color: Colors.white,
                 boxShadow: [
                   BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 20, offset: const Offset(0, -5))
                 ],
               ),
-              child: SafeArea(
-                top: false,
-                child: BottomNavigationBar(
-                  currentIndex: currentDashboardIndex,
-                  onTap: (idx) => setState(() => currentDashboardIndex = idx),
-                  backgroundColor: Colors.white,
-                  selectedItemColor: ZenColors.sageGreen,
-                  unselectedItemColor: ZenColors.textLight.withOpacity(0.5),
-                  type: BottomNavigationBarType.fixed,
-                  elevation: 0,
-                  iconSize: 28,
-                  selectedFontSize: 14,
-                  unselectedFontSize: 13,
-                  selectedLabelStyle: const TextStyle(fontWeight: FontWeight.bold),
-                  unselectedLabelStyle: const TextStyle(),
-                  items: const [
-                    BottomNavigationBarItem(icon: Padding(padding: EdgeInsets.only(bottom: 2), child: Icon(Icons.dashboard_rounded)), label: "大廳"),
-                    BottomNavigationBarItem(icon: Padding(padding: EdgeInsets.only(bottom: 2), child: Icon(Icons.fitness_center)), label: "計畫"),
-                    BottomNavigationBarItem(icon: Padding(padding: EdgeInsets.only(bottom: 2), child: Icon(Icons.history)), label: "紀錄"),
-                    BottomNavigationBarItem(icon: Padding(padding: EdgeInsets.only(bottom: 2), child: Icon(Icons.bar_chart)), label: "數據"),
-                  ],
-                ),
+              child: BottomNavigationBar(
+                currentIndex: currentDashboardIndex,
+                onTap: (idx) => setState(() => currentDashboardIndex = idx),
+                backgroundColor: Colors.white,
+                selectedItemColor: ZenColors.sageGreen,
+                unselectedItemColor: ZenColors.textLight.withOpacity(0.5),
+                type: BottomNavigationBarType.fixed,
+                elevation: 0,
+                iconSize: 28,
+                selectedFontSize: 14,
+                unselectedFontSize: 13,
+                selectedLabelStyle: const TextStyle(fontWeight: FontWeight.bold),
+                unselectedLabelStyle: const TextStyle(),
+                items: const [
+                  BottomNavigationBarItem(icon: Padding(padding: EdgeInsets.only(bottom: 2), child: Icon(Icons.dashboard_rounded)), label: "大廳"),
+                  BottomNavigationBarItem(icon: Padding(padding: EdgeInsets.only(bottom: 2), child: Icon(Icons.fitness_center)), label: "計畫"),
+                  BottomNavigationBarItem(icon: Padding(padding: EdgeInsets.only(bottom: 2), child: Icon(Icons.history)), label: "紀錄"),
+                  BottomNavigationBarItem(icon: Padding(padding: EdgeInsets.only(bottom: 2), child: Icon(Icons.bar_chart)), label: "數據"),
+                ],
               ),
             )
           : null,
