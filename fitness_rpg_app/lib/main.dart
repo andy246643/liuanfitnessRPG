@@ -608,7 +608,7 @@ class _WorkoutManagerState extends State<WorkoutManager> {
     }
 
     // iOS 優化：在點擊瞬間預熱全域音訊，確保權限開啟
-    AudioPlayer().play(AssetSource('audio/longevity_rest.wav'), volume: 0).then((p) => p.stop());
+    AudioPlayer().play(AssetSource('audio/longevity_rest.wav'), volume: 0);
 
     showDialog(
       context: context,
