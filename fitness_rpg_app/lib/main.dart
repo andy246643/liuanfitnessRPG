@@ -2053,7 +2053,7 @@ class _WorkoutManagerState extends State<WorkoutManager> {
               ),
               Expanded(
                 child: Text(
-                  "${activeExercise!['_is_using_alt'] == true ? (activeExercise!['alt_exercise'] ?? activeExercise!['exercise']) : activeExercise!['exercise']}",
+                  "${activeExercise!['_current_exercise_name'] ?? (activeExercise!['_is_using_alt'] == true ? (activeExercise!['alt_exercise'] ?? activeExercise!['exercise']) : activeExercise!['exercise'])}",
                   textAlign: TextAlign.center,
                   style: TextStyle(fontFamily: fFam, 
                     color: txtCol,
