@@ -524,10 +524,10 @@ class _WorkoutManagerState extends State<WorkoutManager> {
       activeExerciseIndex = index;
       currentRpe = 8;
       
-      // 判斷目前是否正在使用替換動作
-      final isAlt = ex['_is_alt'] == true;
+      // 判斷目前是否正在使用替換動作 (修正變數不一致 Bug)
+      final isNowUsingAlt = ex['_is_using_alt'] == true;
       
-      final rawPrescribed = isAlt ? ex['alt_prescribed_sets'] : ex['prescribed_sets'];
+      final rawPrescribed = isNowUsingAlt ? ex['alt_prescribed_sets'] : ex['prescribed_sets'];
       final prescribedSets = rawPrescribed is List ? rawPrescribed : [];
 
       if (prescribedSets.isNotEmpty) {
@@ -565,8 +565,8 @@ class _WorkoutManagerState extends State<WorkoutManager> {
   // 啟動休息與達成率計算
   void _startRest(int setIdx) {
     final ex = activeExercise!;
-    final isAlt = ex['_is_alt'] == true;
-    final prescribedSets = (isAlt ? ex['alt_prescribed_sets'] : ex['prescribed_sets']) as List?;
+    final isNowUsingAlt = ex['_is_using_alt'] == true;
+    final prescribedSets = (isNowUsingAlt ? ex['alt_prescribed_sets'] : ex['prescribed_sets']) as List?;
 
     double targetWeight = 0;
     int targetReps = 0;
@@ -607,6 +607,9 @@ class _WorkoutManagerState extends State<WorkoutManager> {
       }
     }
 
+    // iOS 優化：在點擊瞬間預熱全域音訊，確保權限開啟
+    AudioPlayer().play(AssetSource('audio/longevity_rest.wav'), volume: 0).then((p) => p.stop());
+
     showDialog(
       context: context,
       barrierDismissible: false, // 禁止點擊背景關閉
@@ -621,8 +624,8 @@ class _WorkoutManagerState extends State<WorkoutManager> {
     if (activeExercise == null || activeExerciseIndex == null) return;
 
     final ex = activeExercise!;
-    final isAlt = ex['_is_alt'] == true;
-    final prescribedSets = (isAlt ? ex['alt_prescribed_sets'] : ex['prescribed_sets']) as List?;
+    final isNowUsingAlt = ex['_is_using_alt'] == true;
+    final prescribedSets = (isNowUsingAlt ? ex['alt_prescribed_sets'] : ex['prescribed_sets']) as List?;
 
     double totalRateSum = 0;
     for (int i = 0; i < currentSets.length; i++) {
@@ -671,7 +674,7 @@ class _WorkoutManagerState extends State<WorkoutManager> {
       "plan_name": selectedPlanName,
       "exercise_name":
           activeExercise!['_current_exercise_name'] ??
-          activeExercise!['exercise'],
+          (activeExercise!['_is_using_alt'] == true ? activeExercise!['alt_exercise'] : activeExercise!['exercise']),
       "weight": (currentSets.last['weight'] as num).toDouble(),
       "reps": (currentSets.last['reps'] as num).toInt(),
       "sets": currentSets.length,
@@ -2050,7 +2053,7 @@ class _WorkoutManagerState extends State<WorkoutManager> {
               ),
               Expanded(
                 child: Text(
-                  "${activeExercise!['exercise']}",
+                  "${activeExercise!['_is_using_alt'] == true ? (activeExercise!['alt_exercise'] ?? activeExercise!['exercise']) : activeExercise!['exercise']}",
                   textAlign: TextAlign.center,
                   style: TextStyle(fontFamily: fFam, 
                     color: txtCol,
@@ -2292,6 +2295,15 @@ class _WorkoutManagerState extends State<WorkoutManager> {
                 }
               } catch (e) {
                 print("❌ 資料存檔或刪除失敗：$e");
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text("數據上傳失敗: $e"),
+                      backgroundColor: Colors.red,
+                      duration: Duration(seconds: 5),
+                    ),
+                  );
+                }
               }
 
               setState(() {
@@ -2768,8 +2780,9 @@ class _RestTimerDialogState extends State<RestTimerDialog> {
       // 確保音量是滿的，將原本預熱用的音效進度歸零後播放
       await _audioPlayer?.setVolume(1.0);
       
-      // 保險起見，重新 play
+      // 保險起見，重新 play (Web 版建議先 setSource 再 resume 或再次 play)
       String audioFile = isRpgMode.value ? 'audio/rpg_rest.wav' : 'audio/longevity_rest.wav';
+      await _audioPlayer?.stop(); // 先停止之前的 (如果有)
       await _audioPlayer?.play(AssetSource(audioFile));
     } catch (e) {
       print("Play ringtone failed: $e");
@@ -2809,6 +2822,14 @@ class _RestTimerDialogState extends State<RestTimerDialog> {
               fontWeight: FontWeight.bold,
             ),
           ),
+          if (isFinished) ...[
+             SizedBox(height: 10),
+            TextButton.icon(
+              onPressed: () => _playRingtone(),
+              icon:  Icon(Icons.volume_up, color: pCol),
+              label: Text("點此再次播放音效", style: TextStyle(fontFamily: fFam, color: pCol)),
+            ),
+          ],
         ],
       ),
       actionsAlignment: MainAxisAlignment.center,
