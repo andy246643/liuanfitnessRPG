@@ -176,6 +176,7 @@ class _PlanEditorScreenState extends State<PlanEditorScreen> {
             Expanded(
                child: ReorderableListView.builder(
                  itemCount: _details.length,
+                 buildDefaultDragHandles: false,
                  onReorder: (oldIndex, newIndex) {
                     setState(() {
                        if (oldIndex < newIndex) newIndex -= 1;
@@ -187,6 +188,7 @@ class _PlanEditorScreenState extends State<PlanEditorScreen> {
                     final detail = _details[index];
                     return _DetailEditCard(
                        key: ValueKey(detail.id ?? 'new_$index'),
+                       index: index,
                        detail: detail,
                        onChanged: (newDetail) => _updateDetail(index, newDetail),
                        onDelete: () {
@@ -217,12 +219,14 @@ class _PlanEditorScreenState extends State<PlanEditorScreen> {
 
 // ─── 動作編輯卡片（StatefulWidget for batch add state） ───────────────────────
 class _DetailEditCard extends StatefulWidget {
+  final int index;
   final PlanDetail detail;
   final ValueChanged<PlanDetail> onChanged;
   final VoidCallback onDelete;
 
   const _DetailEditCard({
     super.key,
+    required this.index,
     required this.detail,
     required this.onChanged,
     required this.onDelete,
@@ -315,7 +319,13 @@ class _DetailEditCardState extends State<_DetailEditCard> {
             // ── 動作名稱 ──────────────────────────────────────────
             Row(
               children: [
-                const Icon(Icons.drag_handle, color: Colors.grey),
+                ReorderableDragStartListener(
+                  index: widget.index,
+                  child: const Padding(
+                    padding: EdgeInsets.only(right: 8.0, left: 4.0),
+                    child: Icon(Icons.drag_indicator, color: Colors.grey),
+                  ),
+                ),
                 const SizedBox(width: 8),
                 Expanded(
                   child: TextFormField(
@@ -353,6 +363,7 @@ class _DetailEditCardState extends State<_DetailEditCard> {
              ReorderableListView(
                 shrinkWrap: true,
                 physics: const NeverScrollableScrollPhysics(),
+                buildDefaultDragHandles: false,
                 onReorder: _reorderSets,
                 children: sets.asMap().entries.map((e) {
                   final idx = e.key;
@@ -367,8 +378,13 @@ class _DetailEditCardState extends State<_DetailEditCard> {
                     padding: const EdgeInsets.only(bottom: 8),
                     child: Row(
                       children: [
-                        const Icon(Icons.drag_handle, color: Colors.grey, size: 20),
-                        const SizedBox(width: 4),
+                        ReorderableDragStartListener(
+                          index: idx,
+                          child: const Padding(
+                            padding: EdgeInsets.only(right: 8.0, left: 4.0),
+                            child: Icon(Icons.drag_handle, color: Colors.grey, size: 24),
+                          ),
+                        ),
                         Container(
                           width: 24, height: 24,
                           alignment: Alignment.center,
@@ -412,11 +428,14 @@ class _DetailEditCardState extends State<_DetailEditCard> {
                              widget.onChanged(widget.detail.copyWith(prescribedSets: newSets));
                           },
                         )),
-                        IconButton(
-                          icon: const Icon(Icons.close, size: 18, color: Colors.red),
-                          onPressed: () => _removeSet(idx),
-                          padding: EdgeInsets.zero,
-                          constraints: const BoxConstraints(),
+                        Padding(
+                          padding: const EdgeInsets.only(left: 8.0),
+                          child: IconButton(
+                            icon: const Icon(Icons.close, size: 24, color: Colors.red),
+                            onPressed: () => _removeSet(idx),
+                            padding: const EdgeInsets.all(8),
+                            constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+                          ),
                         ),
                       ],
                     ),
@@ -440,13 +459,19 @@ class _DetailEditCardState extends State<_DetailEditCard> {
             
             const Divider(height: 24),
             // ── 替換動作（收合） ───────────────────────────────────
-            ExpansionTile(
-              title: const Text('設為替換動作 (Alternative)',
-                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.grey)),
-              tilePadding: EdgeInsets.zero,
-              childrenPadding: const EdgeInsets.only(bottom: 8),
-              shape: const Border(),
-              initiallyExpanded: detail.altExercise != null && detail.altExercise!.isNotEmpty,
+            Container(
+              decoration: BoxDecoration(
+                color: Colors.orange.shade50,
+                border: Border.all(color: Colors.orange.shade300, width: 2),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: ExpansionTile(
+                title: const Text('設為替換動作 (Alternative)',
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.deepOrange)),
+                tilePadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                childrenPadding: const EdgeInsets.only(left: 16, right: 16, bottom: 16),
+                shape: const Border(),
+                initiallyExpanded: detail.altExercise != null && detail.altExercise!.isNotEmpty,
               children: [
                 Row(
                   children: [
@@ -476,6 +501,7 @@ class _DetailEditCardState extends State<_DetailEditCard> {
                  ReorderableListView(
                     shrinkWrap: true,
                     physics: const NeverScrollableScrollPhysics(),
+                    buildDefaultDragHandles: false,
                     onReorder: _reorderAltSets,
                     children: detail.altPrescribedSets.asMap().entries.map((e) {
                       final idx = e.key;
@@ -490,8 +516,13 @@ class _DetailEditCardState extends State<_DetailEditCard> {
                         padding: const EdgeInsets.only(bottom: 8),
                         child: Row(
                           children: [
-                            const Icon(Icons.drag_handle, color: Colors.grey, size: 20),
-                            const SizedBox(width: 4),
+                            ReorderableDragStartListener(
+                              index: idx,
+                              child: const Padding(
+                                padding: EdgeInsets.only(right: 8.0, left: 4.0),
+                                child: Icon(Icons.drag_handle, color: Colors.grey, size: 24),
+                              ),
+                            ),
                             Container(
                               width: 24, height: 24,
                               alignment: Alignment.center,
@@ -531,11 +562,14 @@ class _DetailEditCardState extends State<_DetailEditCard> {
                                  widget.onChanged(widget.detail.copyWith(altPrescribedSets: newSets));
                               },
                             )),
-                            IconButton(
-                              icon: const Icon(Icons.close, size: 18, color: Colors.red),
-                              onPressed: () => _removeAltSet(idx),
-                              padding: EdgeInsets.zero,
-                              constraints: const BoxConstraints(),
+                            Padding(
+                              padding: const EdgeInsets.only(left: 8.0),
+                              child: IconButton(
+                                icon: const Icon(Icons.close, size: 24, color: Colors.red),
+                                onPressed: () => _removeAltSet(idx),
+                                padding: const EdgeInsets.all(8),
+                                constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+                              ),
                             ),
                           ],
                         ),
@@ -557,6 +591,7 @@ class _DetailEditCardState extends State<_DetailEditCard> {
                   ),
                 ),
               ],
+            ),
             ),
           ],
         ),

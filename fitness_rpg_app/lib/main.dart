@@ -34,6 +34,18 @@ void main() async {
     await Supabase.initialize(url: supabaseUrl, anonKey: supabaseAnonKey);
   }
 
+  // 設定全域音訊上下文，預設允許與其他 App 音樂混合
+  AudioPlayer.global.setAudioContext(AudioContext(
+    iOS: AudioContextIOS(
+      category: AVAudioSessionCategory.ambient, // ambient 不會中斷其他音樂
+    ),
+    android: AudioContextAndroid(
+      contentType: AndroidContentType.music,
+      usageType: AndroidUsageType.media,
+      audioFocus: AndroidAudioFocus.none,
+    ),
+  ));
+
   runApp(const FitnessRPGApp());
 }
 
@@ -193,6 +205,7 @@ class _WorkoutManagerState extends State<WorkoutManager> {
   List<Map<String, dynamic>> currentSets = [];
 
   // 3. 結算與計時相關
+  TextEditingController currentExerciseNoteController = TextEditingController();
   TextEditingController noteController = TextEditingController();
   String lastCompletionRate = "0%";
   List<Map<String, dynamic>> pendingWorkoutLogs = [];
@@ -667,14 +680,16 @@ class _WorkoutManagerState extends State<WorkoutManager> {
       "completion_rate": rate,
       "volume": exerciseVolume,
       "rpe": currentRpe,
+      "notes": currentExerciseNoteController.text, // 單項動作筆記
       "created_at": DateTime.now().toIso8601String(),
     };
 
     // 加入本地暫存，等結算一起送出
     pendingWorkoutLogs.add(logData);
-    print("✅ 紀錄已暫存：$rate, 總容量: ${logData['volume']}, RPE: $currentRpe");
+    print("✅ 紀錄已暫存：$rate, 總容量: ${logData['volume']}, 備註: ${logData['notes']}");
 
     setState(() {
+      currentExerciseNoteController.clear(); // 儲存完畢清空單項筆記
       exerciseFinalRates[activeExerciseIndex!] = rate;
       exerciseCompletion[activeExerciseIndex!] = true;
       for (var s in currentSets) {
@@ -1397,7 +1412,7 @@ class _WorkoutManagerState extends State<WorkoutManager> {
               const SizedBox(height: 24),
               TextField(
                 controller: coachNameController,
-                style: TextStyle(fontFamily: fFam, color: txtCol),
+                style: TextStyle(fontFamily: fFam, color: txtCol, decoration: TextDecoration.none),
                 decoration: InputDecoration(
                   hintText: "教練名稱",
                   hintStyle: TextStyle(fontFamily: fFam, color: dimCol),
@@ -1410,7 +1425,7 @@ class _WorkoutManagerState extends State<WorkoutManager> {
               const SizedBox(height: 16),
               TextField(
                 controller: nameController,
-                style: TextStyle(fontFamily: fFam, color: txtCol),
+                style: TextStyle(fontFamily: fFam, color: txtCol, decoration: TextDecoration.none),
                 decoration: InputDecoration(
                   hintText: (isRpgMode.value ? "冒險者名稱" : "您的名字"),
                   hintStyle: TextStyle(fontFamily: fFam, color: dimCol),
@@ -1905,15 +1920,19 @@ class _WorkoutManagerState extends State<WorkoutManager> {
           String displayExName = isUsingAlt
               ? ex['alt_exercise']
               : (ex['exercise'] ?? '動作');
-          int displaySets = isUsingAlt
-              ? (ex['alt_target_sets'] ?? ex['target_sets'])
-              : (ex['target_sets'] ?? 0);
-          int displayReps = isUsingAlt
-              ? (ex['alt_target_reps'] ?? ex['target_reps'])
-              : (ex['target_reps'] ?? 0);
-          num displayWeight = isUsingAlt
-              ? (ex['alt_target_weight'] ?? ex['target_weight'])
-              : (ex['target_weight'] ?? 0);
+          List<dynamic> psets = isUsingAlt
+              ? (ex['alt_prescribed_sets'] ?? [])
+              : (ex['prescribed_sets'] ?? []);
+          
+          int displaySets = isUsingAlt ? (ex['alt_target_sets'] ?? ex['target_sets'] ?? 0) : (ex['target_sets'] ?? 0);
+          int displayReps = isUsingAlt ? (ex['alt_target_reps'] ?? ex['target_reps'] ?? 0) : (ex['target_reps'] ?? 0);
+          num displayWeight = isUsingAlt ? (ex['alt_target_weight'] ?? ex['target_weight'] ?? 0) : (ex['target_weight'] ?? 0);
+
+          if (psets.isNotEmpty) {
+            displaySets = psets.length;
+            displayReps = (psets[0]['reps'] as num?)?.toInt() ?? 0;
+            displayWeight = (psets[0]['weight'] as num?) ?? 0;
+          }
 
           return Padding(
             padding: const EdgeInsets.only(bottom: 12),
@@ -1930,7 +1949,7 @@ class _WorkoutManagerState extends State<WorkoutManager> {
                     ),
                     title: Text(
                       displayExName,
-                      style: TextStyle(fontFamily: fFam, color: isDone ? dimCol : txtCol, fontWeight: FontWeight.bold),
+                      style: TextStyle(fontFamily: fFam, color: txtCol, fontWeight: FontWeight.bold),
                     ),
                     subtitle: isDone
                         ? Text(
@@ -1938,9 +1957,7 @@ class _WorkoutManagerState extends State<WorkoutManager> {
                             style: TextStyle(fontFamily: fFam, color: Colors.orange, fontSize: 13, fontWeight: FontWeight.w600),
                           )
                         : Text(
-                            "$displaySets 組合 x $displayReps 下 @ ${displayWeight}kg${(ex['target_rpe'] ?? 0) > 0 && (!isUsingAlt)
-                                    ? " RPE ${ex['target_rpe']}"
-                                    : ""}",
+                            "$displaySets 組 $displayReps 下",
                             style: TextStyle(fontFamily: fFam, color: dimCol, fontSize: 13),
                           ),
                     trailing: isDone ? null : Icon(Icons.play_arrow_rounded, color: pCol, size: 30),
@@ -1959,7 +1976,7 @@ class _WorkoutManagerState extends State<WorkoutManager> {
                       padding: const EdgeInsets.only(right: 16.0, bottom: 8.0),
                       child: Align(
                         alignment: Alignment.centerRight,
-                        child: TextButton.icon(
+                        child: OutlinedButton.icon(
                           onPressed: () {
                             setState(() {
                               ex['_is_using_alt'] = !isUsingAlt;
@@ -1968,7 +1985,12 @@ class _WorkoutManagerState extends State<WorkoutManager> {
                           icon: Icon(Icons.swap_horiz, size: 16, color: pCol),
                           label: Text(
                             isUsingAlt ? "切換回原動作" : "切換替換動作",
-                            style: TextStyle(fontFamily: fFam, color: pCol, fontSize: 12, fontWeight: FontWeight.bold),
+                            style: TextStyle(fontFamily: fFam, color: pCol, fontSize: 13, fontWeight: FontWeight.bold),
+                          ),
+                          style: OutlinedButton.styleFrom(
+                            side: BorderSide(color: pCol.withOpacity(0.5)),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
                           ),
                         ),
                       ),
@@ -2019,8 +2041,12 @@ class _WorkoutManagerState extends State<WorkoutManager> {
             children: [
               IconButton(
                 icon: Icon(Icons.arrow_back, color: dimCol),
-                onPressed: () =>
-                    setState(() => activeExercise = null), // 回到副本清單
+                onPressed: () {
+                  setState(() {
+                    activeExercise = null; // 回到副本清單
+                    currentExerciseNoteController.clear();
+                  });
+                },
               ),
               Expanded(
                 child: Text(
@@ -2037,36 +2063,7 @@ class _WorkoutManagerState extends State<WorkoutManager> {
             ],
           ),
         ),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 24),
-          child: ZenCard(
-            padding: 16,
-            child: Column(
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Text(
-                      "疲勞度 (RPE)：",
-                      style: TextStyle(fontFamily: fFam, color: txtCol, fontSize: 16, fontWeight: FontWeight.bold),
-                    ),
-                    Text(
-                      "$currentRpe",
-                      style: TextStyle(fontFamily: fFam, 
-                        fontSize: 28,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.orange,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                _buildRpeSelector(),
-              ],
-            ),
-          ),
-        ),
-        const SizedBox(height: 16),
+
         Expanded(
           child: ListView.builder(
             padding: const EdgeInsets.symmetric(horizontal: 24),
@@ -2074,6 +2071,21 @@ class _WorkoutManagerState extends State<WorkoutManager> {
             itemBuilder: (context, i) => Padding(
               padding: const EdgeInsets.only(bottom: 12),
               child: _buildSetCard(i),
+            ),
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+          child: TextField(
+            controller: currentExerciseNoteController,
+            style: TextStyle(fontFamily: fFam, color: txtCol, decoration: TextDecoration.none),
+            maxLines: 2,
+            decoration: InputDecoration(
+              hintText: "動作備註 (選填)：做起來的感覺如何？",
+              hintStyle: TextStyle(fontFamily: fFam, color: dimCol),
+              filled: true,
+              fillColor: isRpgMode.value ? Colors.black : Colors.white,
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide.none),
             ),
           ),
         ),
@@ -2187,13 +2199,43 @@ class _WorkoutManagerState extends State<WorkoutManager> {
               ),
             ],
           ),
+          const SizedBox(height: 16),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(
+                "全課表疲勞度 (RPE)：",
+                style: TextStyle(fontFamily: fFam, color: txtCol, fontSize: 16, fontWeight: FontWeight.bold),
+              ),
+              Text(
+                "$currentRpe",
+                style: TextStyle(fontFamily: fFam, 
+                  fontSize: 28,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.orange,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(
+            "1-10 分，1 分最輕鬆，10 分是最累",
+            style: TextStyle(fontFamily: fFam, color: dimCol, fontSize: 12),
+          ),
+          const SizedBox(height: 8),
+          _buildRpeSelector(),
           const SizedBox(height: 24),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: Text("附註留言 (選填)", style: TextStyle(fontFamily: fFam, color: txtCol, fontWeight: FontWeight.bold)),
+          ),
+          const SizedBox(height: 8),
           TextField(
             controller: noteController,
-            style: TextStyle(fontFamily: fFam, color: txtCol),
+            style: TextStyle(fontFamily: fFam, color: txtCol, decoration: TextDecoration.none),
             maxLines: 2,
             decoration: InputDecoration(
-              hintText: "記錄今天的感想...",
+              hintText: "記錄今天的感想或有疑慮的地方...",
               hintStyle: TextStyle(fontFamily: fFam, color: dimCol),
               filled: true,
               fillColor: isRpgMode.value ? Colors.black : Colors.white,
@@ -2220,6 +2262,7 @@ class _WorkoutManagerState extends State<WorkoutManager> {
                   'completion_rate': finalRateString,
                   'total_rate': finalScore,
                   'notes': noteController.text, // 抓取筆記內容
+                  'rpe': currentRpe, // 全局 RPE
                   'session_id': currentSessionId, // 掛鉤同一個 session
                   'created_at': DateTime.now().toIso8601String(),
                 };
@@ -2628,6 +2671,20 @@ class _RestTimerDialogState extends State<RestTimerDialog> {
     super.initState();
     remainingSeconds = widget.restTimeSeconds;
     endTime = DateTime.now().add(Duration(seconds: remainingSeconds));
+    
+    // 初始化並預設為可與背景音樂混合的模式
+    _audioPlayer = AudioPlayer();
+    _audioPlayer?.setAudioContext(AudioContext(
+      iOS: AudioContextIOS(
+        category: AVAudioSessionCategory.ambient, // 預熱時使用 ambient
+      ),
+      android: AudioContextAndroid(
+        contentType: AndroidContentType.music,
+        usageType: AndroidUsageType.media,
+        audioFocus: AndroidAudioFocus.none,
+      ),
+    ));
+    _prewarmAudio();
 
     timer = Timer.periodic( Duration(seconds: 1), (Timer t) {
       if (!mounted) {
@@ -2650,6 +2707,22 @@ class _RestTimerDialogState extends State<RestTimerDialog> {
         });
       }
     });
+  }
+
+  // 預先播放解除限制
+  Future<void> _prewarmAudio() async {
+    try {
+      // 設定音量為 0，播放一瞬間就暫停，解鎖播放權限
+      await _audioPlayer?.setVolume(0);
+      String audioFile = isRpgMode.value ? 'audio/rpg_rest.wav' : 'audio/longevity_rest.wav';
+      await _audioPlayer?.play(AssetSource(audioFile));
+      await Future.delayed(const Duration(milliseconds: 50));
+      await _audioPlayer?.pause();
+      // 將音量恢復為正常值 1.0 (最大音量)
+      await _audioPlayer?.setVolume(1.0);
+    } catch (e) {
+      print("Audio prewarm failed: $e");
+    }
   }
 
   Future<void> _triggerVibration() async {
@@ -2675,9 +2748,32 @@ class _RestTimerDialogState extends State<RestTimerDialog> {
   }
 
   Future<void> _playRingtone() async {
-    _audioPlayer = AudioPlayer();
-    String audioFile = isRpgMode.value ? 'audio/rpg_rest.wav' : 'audio/longevity_rest.wav';
-    await _audioPlayer?.play(AssetSource(audioFile));
+    try {
+      // 當時間到的時候，切換到會降低其他音樂音量 (Duck) 的模式
+      await _audioPlayer?.setAudioContext(AudioContext(
+        iOS: AudioContextIOS(
+          category: AVAudioSessionCategory.playback, // 切換到 playback 以便 ducking
+          options: {
+            AVAudioSessionOptions.duckOthers,
+            AVAudioSessionOptions.interruptSpokenAudioAndMixWithOthers,
+          },
+        ),
+        android: AudioContextAndroid(
+          contentType: AndroidContentType.music,
+          usageType: AndroidUsageType.notificationEvent, // 使用通知類別
+          audioFocus: AndroidAudioFocus.gainTransientMayDuck,
+        ),
+      ));
+
+      // 確保音量是滿的，將原本預熱用的音效進度歸零後播放
+      await _audioPlayer?.setVolume(1.0);
+      
+      // 保險起見，重新 play
+      String audioFile = isRpgMode.value ? 'audio/rpg_rest.wav' : 'audio/longevity_rest.wav';
+      await _audioPlayer?.play(AssetSource(audioFile));
+    } catch (e) {
+      print("Play ringtone failed: $e");
+    }
   }
 
   @override

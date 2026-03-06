@@ -1432,6 +1432,26 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
                               _InfoChip(icon: Icons.check_circle, label: '達成率: $completionRate', color: Colors.green),
                             ],
                           ),
+                        ],
+                        if (log['notes'] != null && log['notes'] != "無" && log['notes'] != "") ...[
+                          const SizedBox(height: 12),
+                          Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: Colors.yellow.shade50,
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: Colors.yellow.shade200),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Text('📝 動作備註', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.orange)),
+                                const SizedBox(height: 4),
+                                Text(log['notes'], style: TextStyle(color: Colors.orange.shade900)),
+                              ],
+                            ),
+                          ),
                         ]
                       ] else ...[
                         Row(
@@ -1439,7 +1459,7 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
                              _InfoChip(icon: Icons.emoji_events, label: '總結達成率: $completionRate', color: Colors.orange.shade800),
                           ],
                         ),
-                        if (log['notes'] != null && log['notes'] != "無") ...[
+                        if (log['notes'] != null && log['notes'] != "無" && log['notes'] != "") ...[
                           const SizedBox(height: 12),
                           Container(
                             width: double.infinity,
