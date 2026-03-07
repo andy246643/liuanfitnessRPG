@@ -608,7 +608,8 @@ class _WorkoutManagerState extends State<WorkoutManager> {
     }
 
     // iOS 優化：在點擊瞬間預熱全域音訊，確保權限開啟
-    AudioPlayer().play(AssetSource('audio/longevity_rest.wav'), volume: 0);
+    String prewarmFile = isRpgMode.value ? 'audio/RPG回血.wav' : 'audio/長壽恢復.wav';
+    AudioPlayer().play(AssetSource(prewarmFile), volume: 0);
 
     showDialog(
       context: context,
@@ -2253,68 +2254,70 @@ class _WorkoutManagerState extends State<WorkoutManager> {
               padding:  EdgeInsets.symmetric(horizontal: 24, vertical: 12),
             ),
             onPressed: () async {
-              // 🚀 3. 按下結束時，把暫存紀錄與總分、備註一起送上雲端
-              try {
-                String finalRateString = "${finalScore.toStringAsFixed(0)}%";
-
-                // 準備最後的結算紀錄
-                final summaryLog = {
-                  'user_id': currentUserId,
-                  'plan_name': selectedPlanName,
-                  'exercise_name': '🏆 副本總結結算', // 🚀 這樣你一眼就能看出哪一行是總結
-                  'completion_rate': finalRateString,
-                  'total_rate': finalScore,
-                  'notes': noteController.text, // 抓取筆記內容
-                  'rpe': currentRpe, // 全局 RPE
-                  'session_id': currentSessionId, // 掛鉤同一個 session
-                  'created_at': DateTime.now().toIso8601String(),
-                };
-
-                // 合併全部要上傳的資料
-                List<Map<String, dynamic>> allLogsToUpload = List.from(
-                  pendingWorkoutLogs,
-                );
-                allLogsToUpload.add(summaryLog);
-
-                // 一次上傳
-                await supabase.from('workout_logs').insert(allLogsToUpload);
-                
                 // 播放上傳成功音效
-                final summaryPlayer = AudioPlayer();
-                await summaryPlayer.play(AssetSource('audio/upload_data.wav'));
-                
-                print("✅ 結算與動作紀錄存檔成功！");
-
-                // 將該筆課表標示為完成，避免重複執行並保留供教練複製
-                if (selectedPlanId.isNotEmpty) {
-                  await supabase
-                      .from('workout_plans')
-                      .update({'is_completed': true})
-                      .eq('id', selectedPlanId);
-                  print("✅ 課表已標示為完成！");
+                try {
+                  final summaryPlayer = AudioPlayer();
+                  await summaryPlayer.play(AssetSource('audio/上傳數據.wav'));
+                } catch (audioError) {
+                  print("Upload audio play failed (iOS restriction): $audioError");
                 }
-              } catch (e) {
-                print("❌ 資料存檔或刪除失敗：$e");
-                if (context.mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text("數據上傳失敗: $e"),
-                      backgroundColor: Colors.red,
-                      duration: Duration(seconds: 5),
-                    ),
+
+                // 🚀 3. 按下結束時，把暫存紀錄與總分、備註一起送上雲端
+                try {
+                  String finalRateString = "${finalScore.toStringAsFixed(0)}%";
+
+                  // 準備最後的結算紀錄
+                  final summaryLog = {
+                    'user_id': currentUserId,
+                    'plan_name': selectedPlanName,
+                    'exercise_name': '🏆 副本總結結算', 
+                    'completion_rate': finalRateString,
+                    'total_rate': finalScore,
+                    'notes': noteController.text, 
+                    'rpe': currentRpe, 
+                    'session_id': currentSessionId, 
+                    'created_at': DateTime.now().toIso8601String(),
+                  };
+
+                  // 合併全部要上傳的資料
+                  List<Map<String, dynamic>> allLogsToUpload = List.from(
+                    pendingWorkoutLogs,
                   );
+                  allLogsToUpload.add(summaryLog);
+
+                  // 一次上傳
+                  await supabase.from('workout_logs').insert(allLogsToUpload);
+                  
+                  // 將該筆課表標示為完成，避免重複執行並保留供教練複製
+                  if (selectedPlanId.isNotEmpty) {
+                    await supabase
+                        .from('workout_plans')
+                        .update({'is_completed': true})
+                        .eq('id', selectedPlanId);
+                    print("✅ 課表已標示為完成！");
+                  }
+                } catch (e) {
+                  print("❌ 資料存檔或刪除失敗：$e");
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text("數據上傳失敗: $e"),
+                        backgroundColor: Colors.red,
+                        duration: Duration(seconds: 5),
+                      ),
+                    );
+                  }
                 }
-              }
 
-              setState(() {
-                isTraining = false;
-                noteController.clear(); // 結束後把筆記擦乾淨，下次用
-                pendingWorkoutLogs.clear();
-              });
+                setState(() {
+                  isTraining = false;
+                  noteController.clear(); // 結束後把筆記擦乾淨，下次用
+                  pendingWorkoutLogs.clear();
+                });
 
-              // 🚀 存檔後立即重新整理紀錄，讓歷史課表能馬上看到這筆資料！
-              await _fetchPlans();
-            },
+                // 🚀 存檔後立即重新整理紀錄，讓歷史課表能馬上看到這筆資料！
+                await _fetchPlans();
+              },
             child: Text(
               isRpgMode.value ? "上傳數據並回村莊" : "上傳數據",
               style: TextStyle(fontFamily: fFam, 
@@ -2712,7 +2715,6 @@ class _RestTimerDialogState extends State<RestTimerDialog> {
         });
         t.cancel();
         _triggerVibration();
-        _playRingtone();
       } else {
         setState(() {
           remainingSeconds = endTime.difference(now).inSeconds;
@@ -2726,7 +2728,7 @@ class _RestTimerDialogState extends State<RestTimerDialog> {
     try {
       // 設定音量為 0，播放一瞬間就暫停，解鎖播放權限
       await _audioPlayer?.setVolume(0);
-      String audioFile = isRpgMode.value ? 'audio/rpg_rest.wav' : 'audio/longevity_rest.wav';
+      String audioFile = isRpgMode.value ? 'audio/RPG回血.wav' : 'audio/長壽恢復.wav';
       await _audioPlayer?.play(AssetSource(audioFile));
       await Future.delayed(const Duration(milliseconds: 50));
       await _audioPlayer?.pause();
@@ -2781,7 +2783,7 @@ class _RestTimerDialogState extends State<RestTimerDialog> {
       await _audioPlayer?.setVolume(1.0);
       
       // 保險起見，重新 play (Web 版建議先 setSource 再 resume 或再次 play)
-      String audioFile = isRpgMode.value ? 'audio/rpg_rest.wav' : 'audio/longevity_rest.wav';
+      String audioFile = isRpgMode.value ? 'audio/RPG回血.wav' : 'audio/長壽恢復.wav';
       await _audioPlayer?.stop(); // 先停止之前的 (如果有)
       await _audioPlayer?.play(AssetSource(audioFile));
     } catch (e) {
@@ -2792,8 +2794,8 @@ class _RestTimerDialogState extends State<RestTimerDialog> {
   @override
   void dispose() {
     timer.cancel();
-    _audioPlayer?.stop();
-    _audioPlayer?.dispose();
+    // 移除 _audioPlayer?.stop() 與 _audioPlayer?.dispose() 
+    // 讓音效在對話框關閉後仍能完整播放
     super.dispose();
   }
 
@@ -2824,20 +2826,21 @@ class _RestTimerDialogState extends State<RestTimerDialog> {
           ),
           if (isFinished) ...[
              SizedBox(height: 10),
-            TextButton.icon(
-              onPressed: () => _playRingtone(),
-              icon:  Icon(Icons.volume_up, color: pCol),
-              label: Text("點此再次播放音效", style: TextStyle(fontFamily: fFam, color: pCol)),
-            ),
           ],
         ],
       ),
       actionsAlignment: MainAxisAlignment.center,
       actions: [
         ElevatedButton(
-          onPressed: () {
-            _audioPlayer?.stop();
-            Navigator.of(context).pop();
+          onPressed: () async {
+            if (isFinished) {
+              await _playRingtone();
+              // 不再等待 delay，直接關閉對話框，讓 dispose 處理 (但不 stop 音訊)
+            } else {
+              _audioPlayer?.stop();
+              _audioPlayer?.dispose(); // 只有在「未完成」手動停止時才真正釋放
+            }
+            if (context.mounted) Navigator.of(context).pop();
           },
           style: ElevatedButton.styleFrom(
             backgroundColor: pCol,
