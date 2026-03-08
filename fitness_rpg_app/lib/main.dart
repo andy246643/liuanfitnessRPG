@@ -34,17 +34,25 @@ void main() async {
     await Supabase.initialize(url: supabaseUrl, anonKey: supabaseAnonKey);
   }
 
-  // 設定全域音訊上下文，預設允許與其他 App 音樂混合
-  AudioPlayer.global.setAudioContext(AudioContext(
-    iOS: AudioContextIOS(
-      category: AVAudioSessionCategory.ambient, // ambient 不會中斷其他音樂
-    ),
-    android: AudioContextAndroid(
-      contentType: AndroidContentType.music,
-      usageType: AndroidUsageType.media,
-      audioFocus: AndroidAudioFocus.none,
-    ),
-  ));
+  // 設定全域音訊上下文，確保行動裝置播放穩定
+  try {
+    AudioPlayer.global.setAudioContext(AudioContext(
+      iOS: AudioContextIOS(
+        category: AVAudioSessionCategory.playback,
+        options: {
+          AVAudioSessionOptions.duckOthers,
+          AVAudioSessionOptions.interruptSpokenAudioAndMixWithOthers,
+        },
+      ),
+      android: AudioContextAndroid(
+        contentType: AndroidContentType.music,
+        usageType: AndroidUsageType.media,
+        audioFocus: AndroidAudioFocus.gainTransientMayDuck,
+      ),
+    ));
+  } catch (e) {
+    debugPrint('⚠️ Warning: AudioPlayer global context setup failed: $e');
+  }
 
   runApp(const FitnessRPGApp());
 }
@@ -215,6 +223,7 @@ class _WorkoutManagerState extends State<WorkoutManager> {
   Map<String, List<Map<String, dynamic>>> achievementStats = {};
   String? selectedAchievementExercise;
   int currentDashboardIndex = 0; // 0: Dashboard, 1: Plans, 2: History, 3: Stats
+  bool _isUploading = false; // 上傳狀態旗標
 
   @override
   void initState() {
@@ -354,32 +363,30 @@ class _WorkoutManagerState extends State<WorkoutManager> {
   Future<void> _fetchPlans() async {
     if (currentUserId.isEmpty) return;
 
-    // 1. 抓取未來課表 (尚未完成的計畫，這邊先簡單列出所有)
-    final response = await supabase
-        .from('workout_plans')
-        .select('id, plan_name')
-        .eq('user_id', currentUserId)
-        .eq('is_completed', false)
-        .neq('is_hidden', true) // 過濾掉已被學生隱藏的課表
-        .order('created_at', ascending: false);
+    // 併行抓取 1.未來課表 2.歷史紀錄 3.身體指標
+    final results = await Future.wait([
+      supabase
+          .from('workout_plans')
+          .select('id, plan_name')
+          .eq('user_id', currentUserId)
+          .eq('is_completed', false)
+          .neq('is_hidden', true)
+          .order('created_at', ascending: false),
+      supabase
+          .from('workout_logs')
+          .select('id, plan_name, created_at, exercise_name, volume, weight, reps, sets, session_id, set_details, notes, total_rate, completion_rate')
+          .eq('user_id', currentUserId)
+          .order('created_at', ascending: false),
+      supabase
+          .from('user_metrics_history')
+          .select('weight, body_fat, created_at')
+          .eq('user_id', currentUserId)
+          .order('created_at', ascending: true),
+    ]);
 
-    // 2. 抓取歷史課表 (已完成的紀錄)
-    final logsResponse = await supabase
-        .from('workout_logs')
-        .select(
-          'id, plan_name, created_at, exercise_name, volume, weight, reps, sets, session_id, set_details, notes, total_rate, completion_rate',
-        )
-        .eq('user_id', currentUserId)
-        .order('created_at', ascending: false);
-
-    final metricsResponse = await supabase
-        .from('user_metrics_history')
-        .select('weight, body_fat, created_at')
-        .eq('user_id', currentUserId)
-        .order('created_at', ascending: true);
-
-    final metricsList = List<Map<String, dynamic>>.from(metricsResponse);
-    final logs = List<Map<String, dynamic>>.from(logsResponse);
+    final response = results[0] as List;
+    final logs = List<Map<String, dynamic>>.from(results[1] as List);
+    final metricsList = List<Map<String, dynamic>>.from(results[2] as List);
 
     // 1. 先把所有 log 照梯次分組
     final Map<String, List<Map<String, dynamic>>> groupedLogs = {};
@@ -607,9 +614,7 @@ class _WorkoutManagerState extends State<WorkoutManager> {
       }
     }
 
-    // iOS 優化：在點擊瞬間預熱全域音訊，確保權限開啟
-    String prewarmFile = isRpgMode.value ? 'audio/RPG回血.wav' : 'audio/長壽恢復.wav';
-    AudioPlayer().play(AssetSource(prewarmFile), volume: 0);
+
 
     showDialog(
       context: context,
@@ -2253,16 +2258,18 @@ class _WorkoutManagerState extends State<WorkoutManager> {
               foregroundColor: bgCol, // 黑色文字
               padding:  EdgeInsets.symmetric(horizontal: 24, vertical: 12),
             ),
-            onPressed: () async {
-                // 播放上傳成功音效
+            onPressed: _isUploading ? null : () async {
+                setState(() => _isUploading = true);
+
+                // 1. 播放上傳成功音效 (不需要 await，避免阻塞)
                 try {
                   final summaryPlayer = AudioPlayer();
-                  await summaryPlayer.play(AssetSource('audio/上傳數據.wav'));
+                  summaryPlayer.play(AssetSource('audio/上傳數據.wav'));
                 } catch (audioError) {
-                  print("Upload audio play failed (iOS restriction): $audioError");
+                  print("Upload audio play failed: $audioError");
                 }
 
-                // 🚀 3. 按下結束時，把暫存紀錄與總分、備註一起送上雲端
+                // 🚀 2. 按下結束時，把暫存紀錄與總分、備註一起送上雲端
                 try {
                   String finalRateString = "${finalScore.toStringAsFixed(0)}%";
 
@@ -2285,19 +2292,36 @@ class _WorkoutManagerState extends State<WorkoutManager> {
                   );
                   allLogsToUpload.add(summaryLog);
 
-                  // 一次上傳
-                  await supabase.from('workout_logs').insert(allLogsToUpload);
+                  // 併行執行: 1.上傳日誌 2.更新課表狀態
+                  List<Future> uploadTasks = [
+                    supabase.from('workout_logs').insert(allLogsToUpload)
+                  ];
                   
-                  // 將該筆課表標示為完成，避免重複執行並保留供教練複製
                   if (selectedPlanId.isNotEmpty) {
-                    await supabase
-                        .from('workout_plans')
-                        .update({'is_completed': true})
-                        .eq('id', selectedPlanId);
-                    print("✅ 課表已標示為完成！");
+                    uploadTasks.add(
+                      supabase
+                          .from('workout_plans')
+                          .update({'is_completed': true})
+                          .eq('id', selectedPlanId)
+                    );
                   }
+
+                  await Future.wait(uploadTasks);
+                  print("✅ 數據併行上傳成功！");
+
+                  // 成功後清理狀態
+                  setState(() {
+                    isTraining = false;
+                    _isUploading = false;
+                    noteController.clear();
+                    pendingWorkoutLogs.clear();
+                  });
+
+                  // 🚀 存檔後立即重新整理紀錄
+                  await _fetchPlans();
                 } catch (e) {
                   print("❌ 資料存檔或刪除失敗：$e");
+                  setState(() => _isUploading = false);
                   if (context.mounted) {
                     ScaffoldMessenger.of(context).showSnackBar(
                       SnackBar(
@@ -2308,24 +2332,21 @@ class _WorkoutManagerState extends State<WorkoutManager> {
                     );
                   }
                 }
-
-                setState(() {
-                  isTraining = false;
-                  noteController.clear(); // 結束後把筆記擦乾淨，下次用
-                  pendingWorkoutLogs.clear();
-                });
-
-                // 🚀 存檔後立即重新整理紀錄，讓歷史課表能馬上看到這筆資料！
-                await _fetchPlans();
               },
-            child: Text(
-              isRpgMode.value ? "上傳數據並回村莊" : "上傳數據",
-              style: TextStyle(fontFamily: fFam, 
-                color: bgCol,
-                fontSize: 16,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
+            child: _isUploading 
+              ? SizedBox(
+                  width: 20, 
+                  height: 20, 
+                  child: CircularProgressIndicator(color: bgCol, strokeWidth: 2)
+                )
+              : Text(
+                  isRpgMode.value ? "上傳數據並回村莊" : "上傳數據",
+                  style: TextStyle(fontFamily: fFam, 
+                    color: bgCol,
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
           ),
         ],
       ),
@@ -2679,7 +2700,6 @@ class _RestTimerDialogState extends State<RestTimerDialog> {
   late Timer timer;
   int remainingSeconds = 0;
   bool isFinished = false;
-  AudioPlayer? _audioPlayer;
 
   @override
   void initState() {
@@ -2687,19 +2707,7 @@ class _RestTimerDialogState extends State<RestTimerDialog> {
     remainingSeconds = widget.restTimeSeconds;
     endTime = DateTime.now().add(Duration(seconds: remainingSeconds));
     
-    // 初始化並預設為可與背景音樂混合的模式
-    _audioPlayer = AudioPlayer();
-    _audioPlayer?.setAudioContext(AudioContext(
-      iOS: AudioContextIOS(
-        category: AVAudioSessionCategory.ambient, // 預熱時使用 ambient
-      ),
-      android: AudioContextAndroid(
-        contentType: AndroidContentType.music,
-        usageType: AndroidUsageType.media,
-        audioFocus: AndroidAudioFocus.none,
-      ),
-    ));
-    _prewarmAudio();
+
 
     timer = Timer.periodic( Duration(seconds: 1), (Timer t) {
       if (!mounted) {
@@ -2714,7 +2722,6 @@ class _RestTimerDialogState extends State<RestTimerDialog> {
           isFinished = true;
         });
         t.cancel();
-        _triggerVibration();
       } else {
         setState(() {
           remainingSeconds = endTime.difference(now).inSeconds;
@@ -2723,79 +2730,9 @@ class _RestTimerDialogState extends State<RestTimerDialog> {
     });
   }
 
-  // 預先播放解除限制
-  Future<void> _prewarmAudio() async {
-    try {
-      // 設定音量為 0，播放一瞬間就暫停，解鎖播放權限
-      await _audioPlayer?.setVolume(0);
-      String audioFile = isRpgMode.value ? 'audio/RPG回血.wav' : 'audio/長壽恢復.wav';
-      await _audioPlayer?.play(AssetSource(audioFile));
-      await Future.delayed(const Duration(milliseconds: 50));
-      await _audioPlayer?.pause();
-      // 將音量恢復為正常值 1.0 (最大音量)
-      await _audioPlayer?.setVolume(1.0);
-    } catch (e) {
-      print("Audio prewarm failed: $e");
-    }
-  }
-
-  Future<void> _triggerVibration() async {
-    bool? hasVibrator = await Vibration.hasVibrator();
-    if (hasVibrator ?? false) {
-      bool? hasCustom = await Vibration.hasCustomVibrationsSupport();
-      if (hasCustom ?? false) {
-        Vibration.vibrate(duration: 1000);
-      } else {
-        // Fallback for iOS (standard vibration or multiple short vibrations)
-        Vibration.vibrate();
-        await Future.delayed( Duration(milliseconds: 400));
-        Vibration.vibrate();
-        await Future.delayed( Duration(milliseconds: 400));
-        Vibration.vibrate();
-      }
-    } else {
-      // Final fallback using system HapticFeedback
-      HapticFeedback.heavyImpact();
-      await Future.delayed( Duration(milliseconds: 400));
-      HapticFeedback.heavyImpact();
-    }
-  }
-
-  Future<void> _playRingtone() async {
-    try {
-      // 當時間到的時候，切換到會降低其他音樂音量 (Duck) 的模式
-      await _audioPlayer?.setAudioContext(AudioContext(
-        iOS: AudioContextIOS(
-          category: AVAudioSessionCategory.playback, // 切換到 playback 以便 ducking
-          options: {
-            AVAudioSessionOptions.duckOthers,
-            AVAudioSessionOptions.interruptSpokenAudioAndMixWithOthers,
-          },
-        ),
-        android: AudioContextAndroid(
-          contentType: AndroidContentType.music,
-          usageType: AndroidUsageType.notificationEvent, // 使用通知類別
-          audioFocus: AndroidAudioFocus.gainTransientMayDuck,
-        ),
-      ));
-
-      // 確保音量是滿的，將原本預熱用的音效進度歸零後播放
-      await _audioPlayer?.setVolume(1.0);
-      
-      // 保險起見，重新 play (Web 版建議先 setSource 再 resume 或再次 play)
-      String audioFile = isRpgMode.value ? 'audio/RPG回血.wav' : 'audio/長壽恢復.wav';
-      await _audioPlayer?.stop(); // 先停止之前的 (如果有)
-      await _audioPlayer?.play(AssetSource(audioFile));
-    } catch (e) {
-      print("Play ringtone failed: $e");
-    }
-  }
-
   @override
   void dispose() {
     timer.cancel();
-    // 移除 _audioPlayer?.stop() 與 _audioPlayer?.dispose() 
-    // 讓音效在對話框關閉後仍能完整播放
     super.dispose();
   }
 
@@ -2832,15 +2769,8 @@ class _RestTimerDialogState extends State<RestTimerDialog> {
       actionsAlignment: MainAxisAlignment.center,
       actions: [
         ElevatedButton(
-          onPressed: () async {
-            if (isFinished) {
-              await _playRingtone();
-              // 不再等待 delay，直接關閉對話框，讓 dispose 處理 (但不 stop 音訊)
-            } else {
-              _audioPlayer?.stop();
-              _audioPlayer?.dispose(); // 只有在「未完成」手動停止時才真正釋放
-            }
-            if (context.mounted) Navigator.of(context).pop();
+          onPressed: () {
+            if (mounted) Navigator.of(context).pop();
           },
           style: ElevatedButton.styleFrom(
             backgroundColor: pCol,
