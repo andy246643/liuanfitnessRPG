@@ -52,13 +52,18 @@ class _CreatePlanScreenState extends State<CreatePlanScreen> {
     } catch (e) {
       debugPrint('Error fetching plans: $e');
       setState(() => _isLoadingPlans = false);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('搜尋課表失敗，請檢查網路連線'), backgroundColor: Colors.red),
+        );
+      }
     }
   }
 
   void _proceedToEditor(WorkoutPlan selectedPlan) {
     if (_selectedUserId == null) return;
-    
-    Navigator.push(
+
+    Navigator.push<bool>(
       context,
       MaterialPageRoute(
         builder: (context) => PlanEditorScreen(
@@ -66,7 +71,11 @@ class _CreatePlanScreenState extends State<CreatePlanScreen> {
           templatePlan: selectedPlan,
         ),
       ),
-    );
+    ).then((saved) {
+      if (saved == true && mounted) {
+        Navigator.pop(context, true); // 回傳給 trainee_sessions_screen
+      }
+    });
   }
 
   @override

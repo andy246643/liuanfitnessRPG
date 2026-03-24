@@ -1,3 +1,5 @@
+/// 課表動作細節 Model（對應 plan_details 資料表）
+/// 結構與 Coach App 的 PlanDetail 一致，確保資料相容
 class PlanDetail {
   final String? id;
   final String? planId;
@@ -14,19 +16,16 @@ class PlanDetail {
   final int altTargetSets;
   final int altTargetReps;
 
-  // 舊熱身組欄位（保留相容性）
+  /// 舊熱身組欄位（保留相容性）
   final List<Map<String, dynamic>> warmupSets;
 
-  // 完整組別設定 [{weight, reps}, ...]，每條對應 1 組
+  /// 完整組別設定 [{weight, reps, rest_time}, ...]，每條對應 1 組
   final List<Map<String, dynamic>> prescribedSets;
 
-  // 替換動作的完整組別設定
+  /// 替換動作的完整組別設定
   final List<Map<String, dynamic>> altPrescribedSets;
 
-  // 肌群分類（教練手動標註）
-  final String? muscleGroup;
-
-  PlanDetail({
+  const PlanDetail({
     this.id,
     this.planId,
     required this.exercise,
@@ -43,10 +42,9 @@ class PlanDetail {
     this.warmupSets = const [],
     this.prescribedSets = const [],
     this.altPrescribedSets = const [],
-    this.muscleGroup,
   });
 
-  // 訓練量：prescribed_sets 非空時加總每組 weight×reps；否則舊算法
+  /// 訓練量：prescribed_sets 非空時加總每組 weight×reps；否則舊算法
   num get targetVolume {
     if (prescribedSets.isNotEmpty) {
       return prescribedSets.fold<num>(0, (sum, ps) {
@@ -64,13 +62,17 @@ class PlanDetail {
     return mainVolume + warmupVolume;
   }
 
-  factory PlanDetail.fromJson(Map<String, dynamic> json) {
-    List<Map<String, dynamic>> parseList(dynamic raw) {
-      if (raw is List) {
-        return raw.where((e) => e != null && e is Map).map((e) => Map<String, dynamic>.from(e as Map)).toList();
-      }
-      return [];
+  static List<Map<String, dynamic>> _parseList(dynamic raw) {
+    if (raw is List) {
+      return raw
+          .where((e) => e != null && e is Map)
+          .map((e) => Map<String, dynamic>.from(e as Map))
+          .toList();
     }
+    return [];
+  }
+
+  factory PlanDetail.fromJson(Map<String, dynamic> json) {
     return PlanDetail(
       id: json['id'] as String?,
       planId: json['plan_id'] as String?,
@@ -85,10 +87,9 @@ class PlanDetail {
       altTargetWeight: (json['alt_target_weight'] as num?)?.toDouble() ?? 0,
       altTargetSets: json['alt_target_sets'] as int? ?? 0,
       altTargetReps: json['alt_target_reps'] as int? ?? 0,
-      warmupSets: parseList(json['warmup_sets']),
-      prescribedSets: parseList(json['prescribed_sets']),
-      altPrescribedSets: parseList(json['alt_prescribed_sets']),
-      muscleGroup: json['muscle_group'] as String?,
+      warmupSets: _parseList(json['warmup_sets']),
+      prescribedSets: _parseList(json['prescribed_sets']),
+      altPrescribedSets: _parseList(json['alt_prescribed_sets']),
     );
   }
 
@@ -108,7 +109,6 @@ class PlanDetail {
       'warmup_sets': warmupSets,
       'prescribed_sets': prescribedSets,
       'alt_prescribed_sets': altPrescribedSets,
-      'muscle_group': muscleGroup,
     };
     if (id != null) map['id'] = id!;
     if (planId != null) map['plan_id'] = planId!;
@@ -132,7 +132,6 @@ class PlanDetail {
     List<Map<String, dynamic>>? warmupSets,
     List<Map<String, dynamic>>? prescribedSets,
     List<Map<String, dynamic>>? altPrescribedSets,
-    String? muscleGroup,
   }) {
     return PlanDetail(
       id: id ?? this.id,
@@ -151,29 +150,6 @@ class PlanDetail {
       warmupSets: warmupSets ?? this.warmupSets,
       prescribedSets: prescribedSets ?? this.prescribedSets,
       altPrescribedSets: altPrescribedSets ?? this.altPrescribedSets,
-      muscleGroup: muscleGroup ?? this.muscleGroup,
-    );
-  }
-
-  PlanDetail cloneForNewPlan(String newPlanId, {int? newOrderIndex}) {
-    return PlanDetail(
-      id: null,
-      planId: newPlanId,
-      exercise: exercise,
-      targetWeight: targetWeight,
-      targetSets: targetSets,
-      targetReps: targetReps,
-      targetRpe: targetRpe,
-      restTimeSeconds: restTimeSeconds,
-      orderIndex: newOrderIndex ?? orderIndex,
-      altExercise: altExercise,
-      altTargetWeight: altTargetWeight,
-      altTargetSets: altTargetSets,
-      altTargetReps: altTargetReps,
-      warmupSets: warmupSets.isNotEmpty ? List<Map<String, dynamic>>.from(warmupSets) : [],
-      prescribedSets: prescribedSets.isNotEmpty ? List<Map<String, dynamic>>.from(prescribedSets) : [],
-      altPrescribedSets: altPrescribedSets.isNotEmpty ? List<Map<String, dynamic>>.from(altPrescribedSets) : [],
-      muscleGroup: muscleGroup,
     );
   }
 }

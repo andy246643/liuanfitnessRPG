@@ -2,15 +2,18 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/workout_plan.dart';
 import '../models/plan_detail.dart';
+import '../services/muscle_group_classifier.dart';
 
 class PlanEditorScreen extends StatefulWidget {
   final String targetUserId;
   final WorkoutPlan templatePlan;
+  final bool isEditMode;
 
   const PlanEditorScreen({
     super.key,
     required this.targetUserId,
     required this.templatePlan,
+    this.isEditMode = false,
   });
 
   @override
@@ -27,7 +30,9 @@ class _PlanEditorScreenState extends State<PlanEditorScreen> {
   @override
   void initState() {
     super.initState();
-    _planNameController = TextEditingController(text: '${widget.templatePlan.name} (Copy)');
+    _planNameController = TextEditingController(
+      text: widget.isEditMode ? widget.templatePlan.name : '${widget.templatePlan.name} (Copy)',
+    );
     _fetchTemplateDetails();
   }
 
@@ -67,6 +72,59 @@ class _PlanEditorScreenState extends State<PlanEditorScreen> {
     return _details.fold(0, (sum, detail) => sum + detail.targetVolume);
   }
 
+  Future<void> _savePlan() async {
+    if (widget.isEditMode) {
+      await _updateExistingPlan();
+    } else {
+      await _saveNewPlan();
+    }
+  }
+
+  Future<void> _updateExistingPlan() async {
+    if (_planNameController.text.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('請輸入課表名稱')));
+      return;
+    }
+
+    setState(() => _isSaving = true);
+    try {
+      final planId = widget.templatePlan.id!;
+
+      // 1. 更新課表名稱
+      await _supabase
+          .from('workout_plans')
+          .update({'plan_name': _planNameController.text})
+          .eq('id', planId);
+
+      // 2. 刪除舊的 plan_details
+      await _supabase.from('plan_details').delete().eq('plan_id', planId);
+
+      // 3. 插入新的 plan_details
+      if (_details.isNotEmpty) {
+        final newDetailsData = _details.asMap().entries.map((entry) {
+          final detail = entry.value;
+          return detail.cloneForNewPlan(planId, newOrderIndex: entry.key).toJson();
+        }).toList();
+
+        await _supabase.from('plan_details').insert(newDetailsData);
+      }
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('課表已更新！', style: TextStyle(color: Colors.white)), backgroundColor: Colors.green),
+      );
+      Navigator.pop(context, true);
+    } catch (e) {
+      debugPrint('Error updating plan: $e');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('更新失敗，請檢查網路連線後重試', style: TextStyle(color: Colors.white)), backgroundColor: Colors.red),
+      );
+    } finally {
+      if (mounted) setState(() => _isSaving = false);
+    }
+  }
+
   Future<void> _saveNewPlan() async {
     if (_planNameController.text.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('請輸入課表名稱')));
@@ -101,7 +159,10 @@ class _PlanEditorScreenState extends State<PlanEditorScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('已成功建立新課表！', style: TextStyle(color: Colors.white)), backgroundColor: Colors.green),
         );
-        Navigator.popUntil(context, (route) => route.isFirst);
+        // 回傳 true 通知上層重新載入課表列表
+        Navigator.of(context)
+          ..pop(true) // pop PlanEditorScreen
+          ..pop(true); // pop CreatePlanScreen
         
       } catch (e) {
         if (newPlanId != null) {
@@ -113,7 +174,7 @@ class _PlanEditorScreenState extends State<PlanEditorScreen> {
       debugPrint('Error saving new plan: $e');
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('儲存失敗：$e', style: const TextStyle(color: Colors.white)), backgroundColor: Colors.red),
+        const SnackBar(content: Text('儲存失敗，請檢查網路連線後重試', style: TextStyle(color: Colors.white)), backgroundColor: Colors.red),
       );
     } finally {
       if (mounted) setState(() => _isSaving = false);
@@ -136,8 +197,8 @@ class _PlanEditorScreenState extends State<PlanEditorScreen> {
         actions: [
           IconButton(
              icon: _isSaving ? const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Icon(Icons.check),
-             tooltip: '儲存新課表',
-             onPressed: _isSaving ? null : _saveNewPlan,
+             tooltip: widget.isEditMode ? '更新課表' : '儲存新課表',
+             onPressed: _isSaving ? null : _savePlan,
           ),
         ],
       ),
@@ -340,8 +401,48 @@ class _DetailEditCardState extends State<_DetailEditCard> {
                 )
               ],
             ),
+            const SizedBox(height: 8),
+
+            // ── 肌群分類 ──────────────────────────────────────────
+            Row(
+              children: [
+                const SizedBox(width: 44), // 對齊 drag handle 寬度
+                const Icon(Icons.fitness_center, size: 14, color: Colors.teal),
+                const SizedBox(width: 6),
+                const Text('肌群', style: TextStyle(fontSize: 12, color: Colors.teal)),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: DropdownButtonFormField<String?>(
+                    value: detail.muscleGroup,
+                    isDense: true,
+                    decoration: InputDecoration(
+                      isDense: true,
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                      hintText: 'Auto (${MuscleGroupClassifier.classify(detail.exercise)})',
+                      hintStyle: const TextStyle(fontSize: 12, color: Colors.grey),
+                    ),
+                    style: const TextStyle(fontSize: 12, color: Colors.black87),
+                    items: [
+                      const DropdownMenuItem(value: null, child: Text('Auto', style: TextStyle(fontSize: 12, color: Colors.grey))),
+                      ...MuscleGroupClassifier.groupOrder.map((g) =>
+                        DropdownMenuItem(value: g, child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            MuscleGroupClassifier.buildIcon(g, size: 14),
+                            const SizedBox(width: 6),
+                            Text(g, style: const TextStyle(fontSize: 12)),
+                          ],
+                        )),
+                      ),
+                    ],
+                    onChanged: (val) => widget.onChanged(detail.copyWith(muscleGroup: val ?? '')),
+                  ),
+                ),
+              ],
+            ),
             const SizedBox(height: 12),
-            
+
             // ── 組別設定清單 ──────────────────────────────────────────
             Row(
               children: [
@@ -351,7 +452,7 @@ class _DetailEditCardState extends State<_DetailEditCard> {
                 const Spacer(),
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                  decoration: BoxDecoration(color: Colors.blue.withOpacity(0.1), borderRadius: BorderRadius.circular(8)),
+                  decoration: BoxDecoration(color: const Color(0x1A2196F3), borderRadius: BorderRadius.circular(8)),
                   child: Text('Vol: ${detail.targetVolume}',
                       style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.blue, fontSize: 13)),
                 ),
