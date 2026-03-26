@@ -14,82 +14,92 @@ class LoginScreen extends StatefulWidget {
 class _LoginScreenState extends State<LoginScreen> {
   final TextEditingController nameController = TextEditingController();
   final TextEditingController coachNameController = TextEditingController();
+  final FocusNode _coachFocus = FocusNode();
+  final FocusNode _nameFocus = FocusNode();
 
   @override
   void dispose() {
     nameController.dispose();
     coachNameController.dispose();
+    _coachFocus.dispose();
+    _nameFocus.dispose();
     super.dispose();
+  }
+
+  void _doLogin() {
+    widget.onLogin(
+      nameController.text.trim(),
+      coachNameController.text.trim(),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
-    return ListView(
+    return SingleChildScrollView(
       padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 40),
-      children: [
-        ZenCard(
-          child: Column(
-            children: [
-              Text(
-                (isRpgMode.value ? "🔑 冒險者連線" : "伺服器連結"),
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontFamily: fFam,
-                  color: txtCol,
-                  fontSize: 20,
-                  fontWeight: FontWeight.bold,
-                ),
+      child: ZenCard(
+        child: Column(
+          children: [
+            Text(
+              (isRpgMode.value ? "🔑 冒險者連線" : "伺服器連結"),
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontFamily: fFam,
+                color: txtCol,
+                fontSize: 20,
+                fontWeight: FontWeight.bold,
               ),
-              const SizedBox(height: 24),
-              TextField(
-                controller: coachNameController,
-                style: TextStyle(fontFamily: fFam, color: txtCol, decoration: TextDecoration.none),
-                decoration: InputDecoration(
-                  hintText: "教練名稱",
-                  hintStyle: TextStyle(fontFamily: fFam, color: dimCol),
-                  filled: true,
-                  fillColor: bgCol,
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide.none),
-                  prefixIcon: Icon(Icons.shield, color: pCol),
-                ),
+            ),
+            const SizedBox(height: 24),
+            TextField(
+              controller: coachNameController,
+              focusNode: _coachFocus,
+              textInputAction: TextInputAction.next,
+              onSubmitted: (_) => _nameFocus.requestFocus(),
+              style: TextStyle(fontFamily: fFam, color: txtCol, decoration: TextDecoration.none),
+              decoration: InputDecoration(
+                hintText: "教練名稱",
+                hintStyle: TextStyle(fontFamily: fFam, color: dimCol),
+                filled: true,
+                fillColor: bgCol,
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide.none),
+                prefixIcon: Icon(Icons.shield, color: pCol),
               ),
-              const SizedBox(height: 16),
-              TextField(
-                controller: nameController,
-                style: TextStyle(fontFamily: fFam, color: txtCol, decoration: TextDecoration.none),
-                decoration: InputDecoration(
-                  hintText: (isRpgMode.value ? "冒險者名稱" : "您的名字"),
-                  hintStyle: TextStyle(fontFamily: fFam, color: dimCol),
-                  filled: true,
-                  fillColor: bgCol,
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide.none),
-                  prefixIcon: Icon(Icons.person, color: pCol),
-                ),
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: nameController,
+              focusNode: _nameFocus,
+              textInputAction: TextInputAction.done,
+              onSubmitted: (_) => _doLogin(),
+              style: TextStyle(fontFamily: fFam, color: txtCol, decoration: TextDecoration.none),
+              decoration: InputDecoration(
+                hintText: (isRpgMode.value ? "冒險者名稱" : "您的名字"),
+                hintStyle: TextStyle(fontFamily: fFam, color: dimCol),
+                filled: true,
+                fillColor: bgCol,
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide.none),
+                prefixIcon: Icon(Icons.person, color: pCol),
               ),
-              const SizedBox(height: 24),
-              SizedBox(
-                width: double.infinity,
-                child: ElevatedButton(
-                  onPressed: () {
-                    widget.onLogin(
-                      nameController.text.trim(),
-                      coachNameController.text.trim(),
-                    );
-                  },
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: pCol,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(vertical: 16),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                    elevation: 0,
-                  ),
-                  child: Text("進入系統", style: TextStyle(fontFamily: fFam, fontSize: 16, fontWeight: FontWeight.bold)),
+            ),
+            const SizedBox(height: 24),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                onPressed: _doLogin,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: pCol,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                  elevation: 0,
                 ),
+                child: Text("進入系統", style: TextStyle(fontFamily: fFam, fontSize: 16, fontWeight: FontWeight.bold)),
               ),
-            ],
-          ),
+            ),
+          ],
         ),
-      ],
+      ),
     );
   }
 }
