@@ -49035,6 +49035,8 @@ ga3x(){var s=this,r=s.ax
 if(r.length!==0)return B.b.mo(r,0,new A.akI())
 return s.d*s.e*s.f+B.b.mo(s.at,0,new A.akJ())},
 dJ(){var s=this,r=new A.akK(),q=A.as(["exercise",s.c,"target_weight",s.d,"target_sets",s.e,"target_reps",s.f,"target_rpe",s.r,"rest_time_seconds",s.w,"order_index",s.x,"alt_exercise",s.y,"alt_target_weight",s.z,"alt_target_sets",s.Q,"alt_target_reps",s.as,"warmup_sets",r.$1(s.at),"prescribed_sets",r.$1(s.ax),"alt_prescribed_sets",r.$1(s.ay)],t.N,t.z)
+r=s.ch
+if(r!=null&&r.length!==0)q.m(0,"muscle_group",r)
 r=s.a
 if(r!=null)q.m(0,"id",r)
 r=s.b
