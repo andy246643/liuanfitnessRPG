@@ -74,6 +74,59 @@ class MuscleGroupClassifier {
     return '其他';
   }
 
+  /// RPG 屬性用的肌群列表（不含「肩」和「其他」，肩歸入胸，其他平分）
+  static const rpgGroups = ['胸', '背', '腿', '手臂', '核心', '心肺'];
+
+  /// 複合動作分類：回傳主肌群和次要肌群
+  static ({String primary, String? secondary}) classifyCompound(
+    String exerciseName, {
+    String? coachPrimary,
+    String? coachSecondary,
+  }) {
+    // Priority 1: 教練指定
+    if (coachPrimary != null && coachPrimary.isNotEmpty) {
+      return (
+        primary: _mapToRpgGroup(coachPrimary),
+        secondary: coachSecondary != null && coachSecondary.isNotEmpty
+            ? _mapToRpgGroup(coachSecondary)
+            : null,
+      );
+    }
+
+    // Priority 2: 關鍵字交叉判斷
+    final lower = exerciseName.toLowerCase();
+    final List<String> matched = [];
+
+    for (final entry in _keywordMap.entries) {
+      for (final keyword in entry.value) {
+        if (lower.contains(keyword.toLowerCase())) {
+          final rpgGroup = _mapToRpgGroup(entry.key);
+          if (!matched.contains(rpgGroup)) {
+            matched.add(rpgGroup);
+          }
+          break; // 一個肌群只需匹配一次
+        }
+      }
+    }
+
+    if (matched.isEmpty) {
+      return (primary: '核心', secondary: null); // 預設給核心
+    }
+    if (matched.length == 1) {
+      return (primary: matched[0], secondary: null);
+    }
+    return (primary: matched[0], secondary: matched[1]);
+  }
+
+  /// 將原始肌群名映射到 RPG 六大屬性
+  static String _mapToRpgGroup(String group) {
+    switch (group) {
+      case '肩': return '胸'; // 肩推歸入胸（上肢推力）
+      case '其他': return '核心';
+      default: return rpgGroups.contains(group) ? group : '核心';
+    }
+  }
+
   /// 批量分組所有動作名稱
   static Map<String, List<String>> groupExercises(
     Iterable<String> exerciseNames, {

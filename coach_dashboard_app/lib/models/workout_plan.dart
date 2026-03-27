@@ -15,7 +15,7 @@ class WorkoutPlan {
     return WorkoutPlan(
       id: json['id'] as String?,
       name: json['plan_name'] as String? ?? json['name'] as String? ?? '未命名課表',
-      userId: json['user_id'] as String,
+      userId: json['user_id'] as String? ?? '',
       createdAt: json['created_at'] != null ? DateTime.parse(json['created_at']) : null,
     );
   }

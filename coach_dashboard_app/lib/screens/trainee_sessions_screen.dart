@@ -227,7 +227,7 @@ class _TraineeSessionsScreenState extends State<TraineeSessionsScreen> with Sing
       final supabase = Supabase.instance.client;
       final response = await supabase
           .from('workout_plans')
-          .select('id, plan_name, created_at, plan_details(id, exercise, target_sets, target_reps, target_weight, order_index, prescribed_sets)')
+          .select('id, plan_name, user_id, created_at, plan_details(id, exercise, target_sets, target_reps, target_weight, order_index, prescribed_sets)')
           .eq('user_id', widget.traineeId)
           .order('created_at', ascending: false);
 

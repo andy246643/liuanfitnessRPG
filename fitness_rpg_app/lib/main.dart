@@ -20,6 +20,8 @@ import 'services/auth_service.dart';
 import 'services/workout_service.dart';
 import 'services/stats_service.dart';
 import 'services/local_storage_service.dart';
+import 'services/energy_service.dart';
+import 'models/rpg_character.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -145,6 +147,9 @@ class _WorkoutManagerState extends State<WorkoutManager> {
   String? selectedAchievementExercise;
   int currentDashboardIndex = 0; // 0: Dashboard, 1: Plans, 2: History, 3: Stats
   bool _isUploading = false; // 上傳狀態旗標
+
+  // 5. RPG 角色狀態
+  RpgCharacter? rpgCharacter;
   double _cachedTotalSessionRate = 0; // 快取的總達成率，避免在 build() 重算
 
   @override
@@ -505,6 +510,14 @@ class _WorkoutManagerState extends State<WorkoutManager> {
         selectedAchievementExercise = achievementStats.keys.first;
       }
     });
+
+    // 載入 RPG 角色
+    try {
+      final char = await EnergyService.loadOrCreateCharacter(currentUserId);
+      if (mounted) setState(() => rpgCharacter = char);
+    } catch (e) {
+      debugPrint('RPG 角色載入失敗: $e');
+    }
   }
 
   // 初始化副本佈告欄
@@ -527,16 +540,48 @@ class _WorkoutManagerState extends State<WorkoutManager> {
     });
   }
 
-  // 點擊任務進入特定動作
+  // 點擊任務進入特定動作（支援重新編輯已完成動作）
   void _enterExercise(dynamic ex, int index) {
     setState(() {
       activeExercise = ex;
       activeExerciseIndex = index;
       currentRpe = 8;
-      
-      // 判斷目前是否正在使用替換動作 (修正變數不一致 Bug)
+
+      final bool wasCompleted = exerciseCompletion[index] == true;
+
+      // 如果是重新編輯已完成動作，從 pendingWorkoutLogs 載入之前的資料
+      if (wasCompleted) {
+        final exerciseName = ex['_current_exercise_name'] ??
+            (ex['_is_using_alt'] == true ? ex['alt_exercise'] : ex['exercise']);
+        final existingLog = pendingWorkoutLogs.lastWhere(
+          (log) => log['exercise_name'] == exerciseName,
+          orElse: () => <String, dynamic>{},
+        );
+
+        if (existingLog.isNotEmpty && existingLog['set_details'] != null) {
+          final savedSets = existingLog['set_details'] as List;
+          currentSets = List.generate(savedSets.length, (i) {
+            final s = savedSets[i] as Map;
+            return {
+              "set_num": i + 1,
+              "weight": (s['weight'] as num?)?.toDouble() ?? 0.0,
+              "reps": (s['reps'] as num?)?.toInt() ?? 0,
+              "rate": s['rate'] ?? "0%",
+            };
+          });
+          // 載入之前的 RPE 和筆記
+          currentRpe = (existingLog['rpe'] as int?) ?? 8;
+          if (existingLog['notes'] != null) {
+            currentExerciseNoteController.text = existingLog['notes'] as String;
+          }
+          exerciseCompletion[index] = false; // 重新啟用
+          return;
+        }
+      }
+
+      // 正常初始化（首次進入動作）
       final isNowUsingAlt = ex['_is_using_alt'] == true;
-      
+
       final rawPrescribed = isNowUsingAlt ? ex['alt_prescribed_sets'] : ex['prescribed_sets'];
       final prescribedSets = rawPrescribed is List ? rawPrescribed : [];
 
@@ -696,20 +741,37 @@ class _WorkoutManagerState extends State<WorkoutManager> {
       "created_at": DateTime.now().toIso8601String(),
     };
 
-    // 加入本地暫存，等結算一起送出
-    pendingWorkoutLogs.add(logData);
-    LocalStorageService.savePendingLogs(pendingWorkoutLogs); // 持久化到本地
-    debugPrint("紀錄已暫存：$rate, 總容量: ${logData['volume']}");
+    // 加入本地暫存（如果同一動作已有紀錄則替換，避免重複）
+    final exerciseName = logData['exercise_name'];
+    final existingIdx = pendingWorkoutLogs.indexWhere(
+      (log) => log['exercise_name'] == exerciseName,
+    );
+    if (existingIdx >= 0) {
+      pendingWorkoutLogs[existingIdx] = logData;
+      debugPrint("紀錄已更新（替換）：$rate, 總容量: ${logData['volume']}");
+    } else {
+      pendingWorkoutLogs.add(logData);
+      debugPrint("紀錄已暫存（新增）：$rate, 總容量: ${logData['volume']}");
+    }
+    LocalStorageService.savePendingLogs(pendingWorkoutLogs);
 
     setState(() {
-      currentExerciseNoteController.clear(); // 儲存完畢清空單項筆記
+      currentExerciseNoteController.clear();
       exerciseFinalRates[activeExerciseIndex!] = rate;
       exerciseCompletion[activeExerciseIndex!] = true;
-      for (var s in currentSets) {
-        double w = (s['weight'] as num).toDouble();
-        int r = (s['reps'] as num).toInt();
-        totalVolume += (w > 0) ? (w * r) : (r * 10);
+      // 重新計算 totalVolume（從所有 pendingWorkoutLogs 加總，避免編輯時重複計算）
+      double recalcVol = 0;
+      for (var log in pendingWorkoutLogs) {
+        final details = log['set_details'] as List?;
+        if (details != null) {
+          for (var s in details) {
+            double w = (s['weight'] as num?)?.toDouble() ?? 0;
+            int r = (s['reps'] as num?)?.toInt() ?? 0;
+            recalcVol += (w > 0) ? (w * r) : (r * 10);
+          }
+        }
       }
+      totalVolume = recalcVol;
       _updateSessionRate(); // 預先計算快取
       activeExercise = null;
       activeExerciseIndex = null;
@@ -726,6 +788,7 @@ class _WorkoutManagerState extends State<WorkoutManager> {
           historicalSessions: historicalSessions,
           totalVolume: totalVolume,
           onStartWorkout: _startWorkout,
+          rpgCharacter: rpgCharacter,
         );
       case 1:
         return PlansView(
@@ -747,6 +810,7 @@ class _WorkoutManagerState extends State<WorkoutManager> {
           historicalSessions: historicalSessions,
           totalVolume: totalVolume,
           onStartWorkout: _startWorkout,
+          rpgCharacter: rpgCharacter,
         );
     }
   }
@@ -1085,6 +1149,34 @@ class _WorkoutManagerState extends State<WorkoutManager> {
       await Future.wait(uploadTasks);
       debugPrint("數據併行上傳成功");
 
+      // --- RPG: 計算並發放能量 ---
+      AwardResult? rpgResult;
+      try {
+        final exerciseInputs = pendingWorkoutLogs.map((log) {
+          return ExerciseEnergyInput(
+            exerciseName: log['exercise_name'] ?? '',
+            sets: List<Map<String, dynamic>>.from(log['set_details'] ?? []),
+          );
+        }).toList();
+
+        final isCoachPlan = selectedPlanId.isNotEmpty;
+        final streakDays = rpgCharacter?.streakDays ?? 0;
+
+        final energyResult = EnergyService.calculateSessionEnergy(
+          exerciseLogs: exerciseInputs,
+          isCoachPlan: isCoachPlan,
+          streakDays: streakDays,
+        );
+
+        rpgResult = await EnergyService.awardEnergy(
+          userId: currentUserId,
+          sessionId: currentSessionId,
+          energyResult: energyResult,
+        );
+      } catch (e) {
+        debugPrint("RPG 能量發放失敗（不影響紀錄）: $e");
+      }
+
       setState(() {
         isTraining = false;
         _isUploading = false;
@@ -1098,13 +1190,29 @@ class _WorkoutManagerState extends State<WorkoutManager> {
       await _fetchPlans();
 
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text("訓練完成！總達成率 ${finalScore.toStringAsFixed(0)}%", style: TextStyle(fontFamily: fFam)),
-            backgroundColor: Colors.green.shade700,
-            duration: const Duration(seconds: 3),
-          ),
-        );
+        // 顯示 RPG 結果或基本完成提示
+        if (rpgResult != null) {
+          final levelUpText = rpgResult.leveledUp ? ' 升級到 Lv.${rpgResult.newLevel}！' : '';
+          final streakText = rpgResult.streakDays > 1 ? ' 連續${rpgResult.streakDays}天' : '';
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                "訓練完成！+${rpgResult.energyEarned} 能量$levelUpText$streakText",
+                style: TextStyle(fontFamily: fFam),
+              ),
+              backgroundColor: rpgResult.leveledUp ? Colors.amber.shade700 : Colors.green.shade700,
+              duration: const Duration(seconds: 4),
+            ),
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text("訓練完成！總達成率 ${finalScore.toStringAsFixed(0)}%", style: TextStyle(fontFamily: fFam)),
+              backgroundColor: Colors.green.shade700,
+              duration: const Duration(seconds: 3),
+            ),
+          );
+        }
       }
     } catch (e) {
       debugPrint("資料存檔或刪除失敗：$e");

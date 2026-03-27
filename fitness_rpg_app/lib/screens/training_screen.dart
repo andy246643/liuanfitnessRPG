@@ -104,17 +104,17 @@ class TrainingScreen extends StatelessWidget {
                     ),
                     subtitle: isDone
                         ? Text(
-                            "\u9054\u6210\u7387 : ${exerciseFinalRates[index] ?? '0%'}",
+                            "達成率 : ${exerciseFinalRates[index] ?? '0%'}  (點擊修改)",
                             style: TextStyle(fontFamily: fFam, color: Colors.orange, fontSize: 13, fontWeight: FontWeight.w600),
                           )
                         : Text(
-                            "$displaySets \u7d44 $displayReps \u4e0b",
+                            "$displaySets 組 $displayReps 下",
                             style: TextStyle(fontFamily: fFam, color: dimCol, fontSize: 13),
                           ),
-                    trailing: isDone ? null : Icon(Icons.play_arrow_rounded, color: pCol, size: 30),
-                    onTap: isDone
-                        ? null
-                        : () {
+                    trailing: isDone
+                        ? Icon(Icons.edit_outlined, color: dimCol, size: 20)
+                        : Icon(Icons.play_arrow_rounded, color: pCol, size: 30),
+                    onTap: () {
                             ex['_current_exercise_name'] = displayExName;
                             ex['_current_target_sets'] = displaySets;
                             ex['_current_target_reps'] = displayReps;

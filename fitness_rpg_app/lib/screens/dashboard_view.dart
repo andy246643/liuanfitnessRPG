@@ -1,14 +1,17 @@
 import 'package:flutter/material.dart';
 import '../theme/zen_theme.dart';
 import '../widgets/zen_card.dart';
+import '../widgets/character_card.dart';
+import '../models/rpg_character.dart';
 
-/// Dashboard view with hero card and analytics.
-/// Extracted from _WorkoutManagerState._buildZenDashboard().
+/// Dashboard view with hero card, RPG character, and analytics.
 class DashboardView extends StatelessWidget {
   final List<Map<String, dynamic>> allPlans;
   final List<Map<String, dynamic>> historicalSessions;
   final double totalVolume;
   final void Function(Map<String, dynamic> plan) onStartWorkout;
+  final RpgCharacter? rpgCharacter;
+  final VoidCallback? onCharacterTap;
 
   const DashboardView({
     super.key,
@@ -16,6 +19,8 @@ class DashboardView extends StatelessWidget {
     required this.historicalSessions,
     required this.totalVolume,
     required this.onStartWorkout,
+    this.rpgCharacter,
+    this.onCharacterTap,
   });
 
   @override
@@ -70,6 +75,12 @@ class DashboardView extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(20, 16, 20, 32),
       child: Column(
         children: [
+          // 0. RPG Character Card
+          if (rpgCharacter != null) ...[
+            CharacterCard(character: rpgCharacter!, onTap: onCharacterTap),
+            const SizedBox(height: 16),
+          ],
+
           // 1. Hero Card: Earliest Plan
           ZenCard(
             color: ZenColors.sageGreen,

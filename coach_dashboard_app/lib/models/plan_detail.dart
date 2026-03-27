@@ -93,6 +93,14 @@ class PlanDetail {
   }
 
   Map<String, dynamic> toJson() {
+    // Strip internal Flutter-only '_id' keys before sending to Supabase
+    List<Map<String, dynamic>> cleanSets(List<Map<String, dynamic>> sets) =>
+        sets.map((s) {
+          final m = Map<String, dynamic>.from(s);
+          m.remove('_id');
+          return m;
+        }).toList();
+
     final map = <String, dynamic>{
       'exercise': exercise,
       'target_weight': targetWeight,
@@ -105,11 +113,15 @@ class PlanDetail {
       'alt_target_weight': altTargetWeight,
       'alt_target_sets': altTargetSets,
       'alt_target_reps': altTargetReps,
-      'warmup_sets': warmupSets,
-      'prescribed_sets': prescribedSets,
-      'alt_prescribed_sets': altPrescribedSets,
-      'muscle_group': muscleGroup,
+      'warmup_sets': cleanSets(warmupSets),
+      'prescribed_sets': cleanSets(prescribedSets),
+      'alt_prescribed_sets': cleanSets(altPrescribedSets),
     };
+    // Only include muscle_group if it has a value — avoids errors when the
+    // column doesn't yet exist in the DB (migration not yet applied).
+    if (muscleGroup != null && muscleGroup!.isNotEmpty) {
+      map['muscle_group'] = muscleGroup;
+    }
     if (id != null) map['id'] = id!;
     if (planId != null) map['plan_id'] = planId!;
     return map;
