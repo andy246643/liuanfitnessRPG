@@ -118,7 +118,11 @@ class _PlanEditorScreenState extends State<PlanEditorScreen> {
       debugPrint('Error updating plan: $e');
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('更新失敗，請檢查網路連線後重試', style: TextStyle(color: Colors.white)), backgroundColor: Colors.red),
+        SnackBar(
+          content: Text('更新失敗: $e', style: const TextStyle(color: Colors.white)),
+          backgroundColor: Colors.red,
+          duration: const Duration(seconds: 10),
+        ),
       );
     } finally {
       if (mounted) setState(() => _isSaving = false);
