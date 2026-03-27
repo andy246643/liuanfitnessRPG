@@ -117,10 +117,9 @@ class PlanDetail {
       'prescribed_sets': cleanSets(prescribedSets),
       'alt_prescribed_sets': cleanSets(altPrescribedSets),
     };
-    // NOTE: muscle_group is intentionally excluded from toJson() writes.
-    // PostgREST's schema cache hasn't refreshed yet for this column.
-    // To re-enable: go to Supabase Dashboard → API → Reload schema cache,
-    // then uncomment: if (muscleGroup != null && muscleGroup!.isNotEmpty) map['muscle_group'] = muscleGroup;
+    if (muscleGroup != null && muscleGroup!.isNotEmpty) {
+      map['muscle_group'] = muscleGroup;
+    }
     if (id != null) map['id'] = id!;
     if (planId != null) map['plan_id'] = planId!;
     return map;
